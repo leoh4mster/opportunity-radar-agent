@@ -7,29 +7,18 @@ same database transaction.
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import re
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.entities import Article
 from app.schemas.dto import CleanArticleIngestRequest
+from app.services.article_identity import compute_content_hash
 from app.services.extraction_service import ExtractionService
 
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_for_hash(text: str) -> str:
-    """Normalize text only for duplicate detection."""
-    return re.sub(r"\s+", "", text or "")
-
-
-def compute_content_hash(text: str) -> str:
-    normalized = normalize_for_hash(text)
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def guess_title_from_content(content: str, fallback: str = "未命名文章") -> str:

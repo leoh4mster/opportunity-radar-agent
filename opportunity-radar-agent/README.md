@@ -75,6 +75,18 @@ cd opportunity-radar-agent
 - 前端：http://127.0.0.1:8501
 - API 文档：http://127.0.0.1:8000/docs
 - 健康检查：http://127.0.0.1:8000/health
+- 总览接口：http://127.0.0.1:8000/dashboard/summary
+
+## 运行测试
+
+项目测试不依赖 API Key 或网络：
+
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q app frontend
+```
+
+GitHub Actions 会在 Python 3.9 和 3.12 上自动执行同一套检查。
 
 ## 可选：配置你自己的 DeepSeek
 

@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import Article
 from app.schemas.dto import ArticleCreate
+from app.services.article_identity import compute_content_hash
 
 
 class ImportService:
-    def import_file(self, db: Session, path: str) -> list[Article]:
+    def import_file(self, db: Session, path: str) -> tuple[list[Article], int]:
         file_path = Path(path)
         if not file_path.exists():
             raise FileNotFoundError(f"文件不存在：{path}")
@@ -20,16 +21,26 @@ class ImportService:
         else:
             raise ValueError("仅支持 JSON / Markdown / TXT 文件")
 
+        existing_hashes = {
+            compute_content_hash(content or "")
+            for (content,) in db.query(Article.content).all()
+        }
         articles: list[Article] = []
+        skipped_duplicates = 0
         for payload in payloads:
             article_in = ArticleCreate(**payload)
+            content_hash = compute_content_hash(article_in.content)
+            if content_hash in existing_hashes:
+                skipped_duplicates += 1
+                continue
             article = Article(**article_in.model_dump())
             db.add(article)
             articles.append(article)
+            existing_hashes.add(content_hash)
         db.commit()
         for article in articles:
             db.refresh(article)
-        return articles
+        return articles, skipped_duplicates
 
     def _load_json(self, file_path: Path) -> list[dict]:
         data = json.loads(file_path.read_text(encoding="utf-8"))

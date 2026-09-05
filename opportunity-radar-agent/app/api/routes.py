@@ -36,6 +36,7 @@ from app.schemas.dto import (
     CalendarEventOut,
     CleanArticleIngestRequest,
     CleanArticleIngestResult,
+    DashboardSummaryOut,
     EnrichmentResultOut,
     RecommendationFeedbackRequest,
     ImportRequest,
@@ -62,6 +63,7 @@ from app.schemas.dto import (
 from app.services.article_ingest_service import ArticleIngestService
 from app.services.article_service import ArticleService
 from app.services.calendar_event_service import CalendarEventService
+from app.services.dashboard_service import DashboardService
 from app.services.extraction_service import ExtractionService
 from app.services.feedback_service import FeedbackService
 from app.services.import_service import ImportService
@@ -86,6 +88,17 @@ _recommendation_refresh_guard = threading.Lock()
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummaryOut)
+def dashboard_summary(user_id: int | None = None, db: Session = Depends(get_db)) -> dict:
+    try:
+        return DashboardService().build_summary(db, user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("dashboard summary failed user_id=%s", user_id)
+        raise HTTPException(status_code=500, detail="总览数据读取失败") from exc
 
 
 @router.get("/llm/config")
@@ -221,14 +234,23 @@ def delete_profile(user_id: int, db: Session = Depends(get_db)) -> dict[str, int
 def import_articles(payload: ImportRequest, db: Session = Depends(get_db)) -> ImportResult:
     try:
         path = str(Path(payload.path))
-        articles = ImportService().import_file(db, path)
+        articles, skipped_duplicates = ImportService().import_file(db, path)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("article import failed path=%s", payload.path)
         raise HTTPException(status_code=500, detail="文章导入失败") from exc
-    logger.info("articles imported count=%s path=%s", len(articles), payload.path)
-    return ImportResult(imported=len(articles), article_ids=[article.id for article in articles])
+    logger.info(
+        "articles imported count=%s skipped_duplicates=%s path=%s",
+        len(articles),
+        skipped_duplicates,
+        payload.path,
+    )
+    return ImportResult(
+        imported=len(articles),
+        skipped_duplicates=skipped_duplicates,
+        article_ids=[article.id for article in articles],
+    )
 
 
 @router.post("/articles/ingest-clean", response_model=CleanArticleIngestResult)

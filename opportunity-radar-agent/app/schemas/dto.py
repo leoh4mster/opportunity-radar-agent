@@ -84,6 +84,7 @@ class ImportRequest(BaseModel):
 
 class ImportResult(BaseModel):
     imported: int
+    skipped_duplicates: int = 0
     article_ids: list[int]
 
 
@@ -250,6 +251,51 @@ class OpportunityStateOut(BaseModel):
 class ProcessResult(BaseModel):
     processed_articles: int
     created_opportunities: int
+
+
+class DashboardCounts(BaseModel):
+    profiles: int = 0
+    articles: int = 0
+    processed_articles: int = 0
+    opportunities: int = 0
+    recommendations: int = 0
+    pending_todos: int = 0
+    upcoming_events: int = 0
+    interaction_events: int = 0
+
+
+class DashboardPipeline(BaseModel):
+    status: str = "empty"
+    unprocessed_articles: int = 0
+    verified_opportunities: int = 0
+    unverified_opportunities: int = 0
+    opportunities_without_deadline: int = 0
+
+
+class DashboardCapabilities(BaseModel):
+    local_rules: bool = True
+    llm: bool = False
+    web_search: bool = False
+    weixin_search: bool = False
+
+
+class DashboardOpportunity(BaseModel):
+    id: int
+    name: str
+    category: str
+    deadline: str = ""
+    location: str = ""
+    verification_status: str = ""
+
+
+class DashboardSummaryOut(BaseModel):
+    selected_user_id: int | None = None
+    counts: DashboardCounts
+    pipeline: DashboardPipeline
+    capabilities: DashboardCapabilities
+    category_distribution: dict[str, int] = Field(default_factory=dict)
+    recent_opportunities: list[DashboardOpportunity] = Field(default_factory=list)
+    generated_at: datetime
 
 
 class ToolCallRequest(BaseModel):

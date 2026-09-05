@@ -18,6 +18,7 @@ API_BASE = os.environ.get("API_BASE", "http://127.0.0.1:8000")
 st.set_page_config(page_title="机会雷达 Agent", layout="wide")
 
 st.title("个性化公众号机会雷达 Agent")
+st.caption("把碎片化公众号信息转化为可比较、可跟进、可复盘的个人发展机会。")
 
 st.markdown(
     """
@@ -221,6 +222,11 @@ def split_csv(text: str) -> list[str]:
 
 def join_csv(items: list[str]) -> str:
     return ", ".join(items or [])
+
+
+def get_dashboard_summary(user_id: int | None = None):
+    suffix = f"?user_id={user_id}" if user_id else ""
+    return api_get(f"/dashboard/summary{suffix}")
 
 
 def run_action(opportunity_id: int, user_id: int, action: str, extra_params: dict | None = None):
@@ -1221,6 +1227,108 @@ def render_source_article_detail() -> None:
     )
 
 
+def render_overview_page() -> None:
+    st.subheader("产品总览")
+    st.caption("一眼查看数据管道、个人行动和可选 AI 能力是否准备就绪。")
+
+    try:
+        profiles = api_get("/profiles")
+        selected_user_id = None
+        if profiles:
+            selected_profile = st.selectbox(
+                "按用户画像查看推荐和行动数据",
+                profiles,
+                format_func=lambda item: f"{item['name']}（{item.get('grade_identity') or '未注明身份'}）",
+                key="overview_profile_select",
+            )
+            selected_user_id = int(selected_profile["id"])
+        summary = get_dashboard_summary(selected_user_id)
+    except APIClientError as exc:
+        st.error(str(exc))
+        return
+
+    counts = summary.get("counts") or {}
+    pipeline = summary.get("pipeline") or {}
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("文章", counts.get("articles", 0), help="已进入本地 SQLite 的公众号文章")
+    metric_cols[1].metric("机会", counts.get("opportunities", 0), help="从文章中抽取出的结构化机会")
+    metric_cols[2].metric("个性化推荐", counts.get("recommendations", 0), help="当前画像对应的推荐结果")
+    metric_cols[3].metric("待办 / 近期提醒", f"{counts.get('pending_todos', 0)} / {counts.get('upcoming_events', 0)}")
+
+    total_articles = int(counts.get("articles") or 0)
+    processed_articles = int(counts.get("processed_articles") or 0)
+    progress_ratio = processed_articles / total_articles if total_articles else 0.0
+    st.markdown("#### 数据处理进度")
+    st.progress(progress_ratio, text=f"已处理 {processed_articles} / {total_articles} 篇文章")
+
+    status = pipeline.get("status") or "empty"
+    if status == "ready":
+        st.success("文章导入、机会抽取和推荐数据已经形成完整链路。")
+    elif status == "needs_processing":
+        st.warning(f"还有 {pipeline.get('unprocessed_articles', 0)} 篇文章等待抽取机会。")
+    elif status == "no_opportunities":
+        st.info("文章已经处理，但尚未识别到机会；可以导入更完整的活动或招募文章。")
+    else:
+        st.info("当前还没有文章。请先使用左侧演示控制台导入示例数据。")
+
+    left, right = st.columns([1.2, 1])
+    with left:
+        st.markdown("#### 机会类型分布")
+        distribution = summary.get("category_distribution") or {}
+        if distribution:
+            chart_rows = [{"类型": category, "数量": count} for category, count in distribution.items()]
+            st.bar_chart(chart_rows, x="类型", y="数量")
+        else:
+            st.caption("暂无机会类型数据。")
+
+    with right:
+        st.markdown("#### 能力状态")
+        capabilities = summary.get("capabilities") or {}
+        capability_rows = [
+            ("本地规则引擎", capabilities.get("local_rules"), "无需密钥，负责基础抽取和排序"),
+            ("DeepSeek 增强", capabilities.get("llm"), "负责对话、成长记忆和 AI 推进"),
+            ("联网核验", capabilities.get("web_search"), "负责补充最新报名和截止信息"),
+            ("微信搜索 MCP", capabilities.get("weixin_search"), "负责扩展公众号搜索入口"),
+        ]
+        for label, enabled, description in capability_rows:
+            icon = "✅" if enabled else "○"
+            st.write(f"{icon} **{label}** — {description}")
+        st.caption("空心圆表示可选增强未配置，不影响基础演示。")
+
+        st.markdown("#### 数据质量提醒")
+        st.write(f"- 未核验机会：{pipeline.get('unverified_opportunities', 0)}")
+        st.write(f"- 缺少明确截止日期：{pipeline.get('opportunities_without_deadline', 0)}")
+        st.write(f"- 已记录交互行为：{counts.get('interaction_events', 0)}")
+
+    recent = summary.get("recent_opportunities") or []
+    st.markdown("#### 最近识别的机会")
+    if recent:
+        st.dataframe(
+            [
+                {
+                    "名称": item.get("name"),
+                    "类型": item.get("category"),
+                    "截止时间": item.get("deadline") or "待确认",
+                    "地点": item.get("location") or "未注明",
+                    "核验状态": item.get("verification_status") or "未核验",
+                }
+                for item in recent
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.caption("暂无机会。")
+
+    with st.expander("推荐的 3 分钟演示路径"):
+        st.markdown(
+            "1. 在 **用户画像** 中说明目标、技能和偏好。\n"
+            "2. 在 **文章库 → 机会库** 中展示从非结构化文章到结构化机会。\n"
+            "3. 在 **推荐排序** 中解释匹配原因，并创建待办或日历提醒。\n"
+            "4. 在 **成长记忆** 中说明系统如何从长期行为持续调整推荐。"
+        )
+
+
 with st.sidebar:
     st.header("演示控制台")
     st.caption("先启动 FastAPI：uvicorn app.main:app --reload")
@@ -1228,7 +1336,10 @@ with st.sidebar:
     import_path = st.text_input("导入文件路径", value=sample_path)
     if st.button("导入文章", use_container_width=True):
         result = api_post("/articles/import", {"path": import_path})
-        st.success(f"已导入 {result['imported']} 篇文章")
+        message = f"已导入 {result['imported']} 篇文章"
+        if result.get("skipped_duplicates"):
+            message += f"，跳过 {result['skipped_duplicates']} 篇重复文章"
+        st.success(message)
     if st.button("处理未抽取文章", use_container_width=True):
         result = api_post("/pipeline/process")
         st.success(f"处理 {result['processed_articles']} 篇文章，新增 {result['created_opportunities']} 个机会")
@@ -1242,9 +1353,13 @@ if st.session_state.get("current_page") == "recommendations":
     st.stop()
 
 
-tab_profile, tab_articles, tab_opps, tab_recs, tab_memory, tab_calendar = st.tabs(
-    ["用户画像", "文章库", "机会库", "推荐排序", "成长记忆", "日历"]
+tab_overview, tab_profile, tab_articles, tab_opps, tab_recs, tab_memory, tab_calendar = st.tabs(
+    ["总览", "用户画像", "文章库", "机会库", "推荐排序", "成长记忆", "日历"]
 )
+
+
+with tab_overview:
+    render_overview_page()
 
 
 with tab_profile:
