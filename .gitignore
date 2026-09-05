@@ -1,0 +1,50 @@
+﻿# Secrets and environment variables
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE configuration
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Local capture and experiment output
+pyautogui/output/
+pyautogui/scripts/output/
+mouse+catch/deepseek_result.txt
+mouse+catch/deepseek_screenshot.png
+
+# Local databases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Microsoft Office temporary files
+~$*

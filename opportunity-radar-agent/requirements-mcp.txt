@@ -1,0 +1,2 @@
+# Optional WeChat-search integration. This package requires Python 3.10+.
+mcp==1.9.4
