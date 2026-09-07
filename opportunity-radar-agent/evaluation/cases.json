@@ -1,0 +1,142 @@
+[
+  {
+    "id": "intern",
+    "title": "AI 实习生招募",
+    "content": "报名截止：2030-12-31\n地点：上海\n申请条件：Python\n报名链接：https://example.com/apply",
+    "expected": {
+      "category": "实习",
+      "deadline": "2030-12-31",
+      "location": "上海",
+      "link": "https://example.com/apply"
+    }
+  },
+  {
+    "id": "competition",
+    "title": "程序设计竞赛报名",
+    "content": "报名截止：2030-06-01\n地点：线上\n报名条件：在校学生",
+    "expected": {
+      "category": "竞赛",
+      "deadline": "2030-06-01",
+      "location": "线上",
+      "link": ""
+    }
+  },
+  {
+    "id": "lab",
+    "title": "实验室招募助研",
+    "content": "报名截止：2030-07-01\n地点：北京\n申请条件：机器学习基础",
+    "expected": {
+      "category": "实验室招募",
+      "deadline": "2030-07-01",
+      "location": "北京",
+      "link": ""
+    }
+  },
+  {
+    "id": "research",
+    "title": "科研项目申请",
+    "content": "申请截止：2030-05-12\n地点：线上\n申请条件：论文复现经验",
+    "expected": {
+      "category": "科研",
+      "deadline": "2030-05-12",
+      "location": "线上",
+      "link": ""
+    }
+  },
+  {
+    "id": "lecture",
+    "title": "数据科学讲座",
+    "content": "报名截止：2030-03-03\n地点：第二教学楼\n活动时间：2030-03-04",
+    "expected": {
+      "category": "讲座",
+      "deadline": "2030-03-03",
+      "location": "第二教学楼",
+      "link": ""
+    }
+  },
+  {
+    "id": "summer",
+    "title": "暑期学校报名",
+    "content": "报名截止：2030-04-20\n地点：杭州",
+    "expected": {
+      "category": "夏令营",
+      "deadline": "2030-04-20",
+      "location": "杭州",
+      "link": ""
+    }
+  },
+  {
+    "id": "scholarship",
+    "title": "奖学金申请通知",
+    "content": "申请截止：2030-09-30\n地点：学生服务中心",
+    "expected": {
+      "category": "奖学金",
+      "deadline": "2030-09-30",
+      "location": "学生服务中心",
+      "link": ""
+    }
+  },
+  {
+    "id": "course",
+    "title": "Python 工作坊",
+    "content": "活动时间：2030-10-12\n地点：线上\n欢迎报名，截止日期尚未公布。",
+    "expected": {
+      "category": "课程",
+      "deadline": "",
+      "location": "线上",
+      "link": ""
+    }
+  },
+  {
+    "id": "exchange",
+    "title": "海外交流项目报名",
+    "content": "申请截止：2030-08-01\n地点：新加坡",
+    "expected": {
+      "category": "出国",
+      "deadline": "2030-08-01",
+      "location": "新加坡",
+      "link": ""
+    }
+  },
+  {
+    "id": "natural_date",
+    "title": "算法实习生招聘",
+    "content": "欢迎申请，报名将于2030年5月1日截止。\n地点：深圳",
+    "expected": {
+      "category": "实习",
+      "deadline": "2030年5月1日",
+      "location": "深圳",
+      "link": ""
+    }
+  },
+  {
+    "id": "plain",
+    "title": "我的校园散步日记",
+    "content": "今天阳光很好，图书馆旁边的树叶开始变黄。",
+    "expected": null
+  },
+  {
+    "id": "news",
+    "title": "人工智能论文解读",
+    "content": "我们讨论注意力机制的原理及实验结果。",
+    "expected": null
+  },
+  {
+    "id": "retrospective",
+    "title": "往届竞赛回顾",
+    "content": "去年竞赛圆满结束，报名截止：2024-05-01\n地点：北京\n本篇仅为回顾，没有新一届报名。",
+    "expected": null
+  },
+  {
+    "id": "cancelled",
+    "title": "讲座取消通知",
+    "content": "原定讲座已取消，不再接受报名。\n活动时间：2030-03-04\n地点：第二教学楼",
+    "expected": null
+  },
+  {
+    "id": "guidance",
+    "title": "实习申请经验分享",
+    "content": "这篇文章介绍如何安排时间、准备申请材料和理解岗位要求，不发布任何岗位。",
+    "expected": null
+  }
+]

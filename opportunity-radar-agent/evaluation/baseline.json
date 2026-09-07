@@ -1,0 +1,10 @@
+{
+  "dataset": "synthetic-v1",
+  "note": "Floors captured from the initial offline baseline, not production targets. Keep failures visible; do not lower floors to hide regressions.",
+  "minimum_metrics": {
+    "precision": 0.7692,
+    "recall": 1.0,
+    "f1": 0.8696,
+    "field_exact_match": 0.975
+  }
+}

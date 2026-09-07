@@ -18,7 +18,7 @@ Opportunity Radar Agent 是一个面向大学生和求职者的本地优先 AI A
 
 ## 核心能力
 
-- 文章导入：支持示例 JSON 和清洗后文章接口，自动去重并保存到 SQLite。
+- 文章导入：支持浏览器上传 JSON / TXT / Markdown、示例文件和采集接口；统一校验、顺序去重与事务回滚。
 - 机会抽取：识别类型、主办方、截止日期、地点、人群、要求和报名入口。
 - 个性化推荐：综合目标、技能、兴趣、时间地点偏好、收益、成本和截止日期排序。
 - 行动 Agent：围绕单个机会执行核验、信息补全、待办创建和日历提醒。
@@ -107,7 +107,9 @@ sh run_frontend.sh
 
 ```bash
 cd opportunity-radar-agent
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
+python -m evaluation.run --check
 python -m compileall -q app frontend
 ```
 
@@ -118,6 +120,8 @@ GitHub Actions 会在 Python 3.9 和 3.12 上自动执行测试与编译检查�
 - 无 API Key 的机会抽取兜底
 - 非机会文章过滤
 - 本地推荐解释生成
+
+新增浏览器上传 API 回归测试与 15 条合成文章评测。当前离线规则 F1 为 0.8696，报告保留 4 个失败案例；这是小型回归集结果，不代表真实业务准确率。详见 [质量与评测说明](opportunity-radar-agent/docs/QUALITY.md)。
 
 ## 目录结构
 
@@ -144,6 +148,7 @@ GitHub Actions 会在 Python 3.9 和 3.12 上自动执行测试与编译检查�
 - [x] 总览仪表盘、核心测试和 GitHub CI
 - [ ] 整理桌面采集实验并形成独立 Collector 模块
 - [ ] 引入 Alembic 数据库迁移和结构化日志
-- [ ] 增加推荐效果评测集与可解释性对比
+- [x] 建立离线抽取合成回归集和 CI 基线检查
+- [ ] 建立真实文章与推荐排序评测集，比较规则和模型效果
 - [ ] 增加用户登录、权限隔离和可部署版本
 - [ ] 补充真实产品截图和演示视频

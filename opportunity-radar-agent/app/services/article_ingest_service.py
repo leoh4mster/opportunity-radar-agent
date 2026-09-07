@@ -51,7 +51,8 @@ class ArticleIngestService:
         if not content:
             raise ValueError("content 不能为空")
 
-        content_hash = payload.content_hash.strip() or compute_content_hash(content)
+        # Client metadata is not authoritative: derive identity from the text.
+        content_hash = compute_content_hash(content)
 
         existing_articles = db.query(Article).all()
         for article in existing_articles:

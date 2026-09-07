@@ -1330,19 +1330,40 @@ def render_overview_page() -> None:
 
 
 with st.sidebar:
-    st.header("演示控制台")
-    st.caption("先启动 FastAPI：uvicorn app.main:app --reload")
+    st.header("导入文章")
+    st.caption("上传 UTF-8 编码的 JSON、TXT 或 Markdown，单文件最多 2 MiB、500 篇。")
+    uploaded = st.file_uploader("选择文章文件", type=["json", "txt", "md", "markdown"])
+    if st.button("上传并导入", disabled=uploaded is None, use_container_width=True):
+        try:
+            if uploaded.size > 2 * 1024 * 1024:
+                st.error("文件不能超过 2 MiB")
+            else:
+                response = requests.post(
+                    f"{API_BASE}/articles/upload",
+                    files={"file": (uploaded.name, uploaded.getvalue(), "application/octet-stream")},
+                    timeout=60,
+                )
+                result = parse_api_response(response, "/articles/upload")
+                st.success(f"新增 {result['imported']} 篇，跳过重复 {result['skipped_duplicates']} 篇。")
+        except requests.RequestException as exc:
+            st.error(request_error_message(exc))
+        except APIClientError as exc:
+            st.error(str(exc))
+    st.caption("也可以导入项目自带的示例文章。导入后点击下方按钮抽取机会。")
     sample_path = str(Path(__file__).resolve().parents[1] / "data" / "wechat_articles.json")
     import_path = st.text_input("导入文件路径", value=sample_path)
     if st.button("导入文章", use_container_width=True):
-        result = api_post("/articles/import", {"path": import_path})
-        message = f"已导入 {result['imported']} 篇文章"
-        if result.get("skipped_duplicates"):
-            message += f"，跳过 {result['skipped_duplicates']} 篇重复文章"
-        st.success(message)
+        try:
+            result = api_post("/articles/import", {"path": import_path})
+            st.success(f"新增 {result['imported']} 篇，跳过重复 {result['skipped_duplicates']} 篇。")
+        except APIClientError as exc:
+            st.error(str(exc))
     if st.button("处理未抽取文章", use_container_width=True):
-        result = api_post("/pipeline/process")
-        st.success(f"处理 {result['processed_articles']} 篇文章，新增 {result['created_opportunities']} 个机会")
+        try:
+            result = api_post("/pipeline/process")
+            st.success(f"处理 {result['processed_articles']} 篇文章，新增 {result['created_opportunities']} 个机会")
+        except APIClientError as exc:
+            st.error(str(exc))
 
 
 if st.session_state.get("current_page") == "source_article_detail":

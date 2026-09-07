@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    def __init__(self) -> None:
-        self.gateway = LLMGateway()
+    def __init__(self, gateway: LLMGateway | None = None) -> None:
+        self.gateway = gateway if gateway is not None else LLMGateway()
 
     def extract_opportunities(self, article_title: str, article_content: str) -> list[dict[str, Any]]:
         if not self.gateway.is_configured():

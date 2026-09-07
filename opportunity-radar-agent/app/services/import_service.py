@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.models.entities import Article
@@ -8,64 +11,89 @@ from app.schemas.dto import ArticleCreate
 from app.services.article_identity import compute_content_hash
 
 
+MAX_IMPORT_BYTES = 2 * 1024 * 1024
+MAX_IMPORT_ARTICLES = 500
+SUPPORTED_SUFFIXES = {".json", ".md", ".markdown", ".txt"}
+
+
 class ImportService:
+    """Validate a whole batch before writing; commit or roll back atomically.
+
+    Sequential imports are idempotent. Concurrent imports still require a
+    database unique constraint (see docs/QUALITY.md).
+    """
+
     def import_file(self, db: Session, path: str) -> tuple[list[Article], int]:
         file_path = Path(path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"文件不存在：{path}")
-        suffix = file_path.suffix.lower()
-        if suffix == ".json":
-            payloads = self._load_json(file_path)
-        elif suffix in {".md", ".markdown", ".txt"}:
-            payloads = [self._load_text(file_path)]
-        else:
-            raise ValueError("仅支持 JSON / Markdown / TXT 文件")
+        if not file_path.is_file():
+            raise FileNotFoundError("导入文件不存在或不是普通文件")
+        with file_path.open("rb") as stream:
+            data = stream.read(MAX_IMPORT_BYTES + 1)
+        return self.import_bytes(db, file_path.name, data)
 
-        existing_hashes = {
-            compute_content_hash(content or "")
-            for (content,) in db.query(Article.content).all()
-        }
-        articles: list[Article] = []
-        skipped_duplicates = 0
-        for payload in payloads:
-            article_in = ArticleCreate(**payload)
-            content_hash = compute_content_hash(article_in.content)
-            if content_hash in existing_hashes:
-                skipped_duplicates += 1
-                continue
-            article = Article(**article_in.model_dump())
-            db.add(article)
-            articles.append(article)
-            existing_hashes.add(content_hash)
-        db.commit()
+    def import_bytes(self, db: Session, filename: str, data: bytes) -> tuple[list[Article], int]:
+        if len(data) > MAX_IMPORT_BYTES:
+            raise ValueError("文件不能超过 2 MiB")
+        suffix = Path(filename).suffix.lower()
+        if suffix not in SUPPORTED_SUFFIXES:
+            raise ValueError("仅支持 JSON / Markdown / TXT 文件")
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("请将文件保存为 UTF-8 编码") from exc
+        title = Path(filename).stem or "未命名文章"
+        if suffix == ".json":
+            try:
+                payloads = json.loads(text)
+            except (ValueError, RecursionError) as exc:
+                raise ValueError("JSON 格式不正确，请检查括号和逗号") from exc
+            if isinstance(payloads, dict):
+                payloads = payloads.get("articles", [payloads])
+            if not isinstance(payloads, list) or not payloads:
+                raise ValueError("JSON 应包含非空的文章数组或文章对象")
+        else:
+            lines = text.lstrip().splitlines()
+            if suffix in {".md", ".markdown"} and lines and lines[0].startswith("#"):
+                title = lines[0].lstrip("#").strip() or title
+            payloads = [{"title": title, "content": text}]
+        if len(payloads) > MAX_IMPORT_ARTICLES:
+            raise ValueError("单次最多导入 500 篇文章")
+
+        validated = []
+        for index, item in enumerate(payloads, 1):
+            if not isinstance(item, dict):
+                raise ValueError(f"第 {index} 篇文章必须是对象")
+            try:
+                article = ArticleCreate(**self._normalize_article(item, title))
+            except ValidationError as exc:
+                raise ValueError(f"第 {index} 篇文章字段类型错误") from exc
+            if not article.content.strip():
+                raise ValueError(f"第 {index} 篇文章正文不能为空")
+            validated.append(article)
+
+        try:
+            existing_hashes = {
+                compute_content_hash(content or "")
+                for (content,) in db.query(Article.content).all()
+            }
+            articles = []
+            skipped = 0
+            for article_in in validated:
+                content_hash = compute_content_hash(article_in.content)
+                if content_hash in existing_hashes:
+                    skipped += 1
+                    continue
+                article = Article(**article_in.model_dump())
+                db.add(article)
+                articles.append(article)
+                existing_hashes.add(content_hash)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         for article in articles:
             db.refresh(article)
-        return articles, skipped_duplicates
-
-    def _load_json(self, file_path: Path) -> list[dict]:
-        data = json.loads(file_path.read_text(encoding="utf-8"))
-        if isinstance(data, dict) and "articles" in data:
-            data = data["articles"]
-        if isinstance(data, dict):
-            data = [data]
-        if not isinstance(data, list):
-            raise ValueError("JSON 格式应为文章对象、文章数组，或包含 articles 的对象")
-        return [self._normalize_article(item, file_path.stem) for item in data]
-
-    def _load_text(self, file_path: Path) -> dict:
-        content = file_path.read_text(encoding="utf-8")
-        title = file_path.stem
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
-        if file_path.suffix.lower() in {".md", ".markdown"} and lines and lines[0].startswith("#"):
-            title = lines[0].lstrip("#").strip() or title
-        return {
-            "title": title,
-            "source": "本地导入",
-            "author": "",
-            "published_at": "",
-            "content": content,
-            "url": "",
-        }
+        return articles, skipped
 
     def _normalize_article(self, item: dict, fallback_title: str) -> dict:
         return {

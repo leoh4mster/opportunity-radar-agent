@@ -82,11 +82,15 @@ cd opportunity-radar-agent
 项目测试不依赖 API Key 或网络：
 
 ```bash
+python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
+python -m evaluation.run --check
 python -m compileall -q app frontend
 ```
 
 GitHub Actions 会在 Python 3.9 和 3.12 上自动执行同一套检查。
+
+页面左侧现在可直接上传 JSON / TXT / Markdown，支持 UTF-8 BOM，最多 2 MiB、500 篇。批次先整体校验再写入，重复导入会跳过。接口及评测指标说明见 [QUALITY.md](docs/QUALITY.md)。
 
 ## 可选：配置你自己的 DeepSeek
 

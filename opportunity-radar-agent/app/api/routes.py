@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import SessionLocal, get_db
@@ -66,7 +66,7 @@ from app.services.calendar_event_service import CalendarEventService
 from app.services.dashboard_service import DashboardService
 from app.services.extraction_service import ExtractionService
 from app.services.feedback_service import FeedbackService
-from app.services.import_service import ImportService
+from app.services.import_service import ImportService, MAX_IMPORT_BYTES
 from app.services.json_utils import dumps
 from app.services.llm_gateway import LLMGateway
 from app.services.matching_service import MatchingService
@@ -251,6 +251,21 @@ def import_articles(payload: ImportRequest, db: Session = Depends(get_db)) -> Im
         skipped_duplicates=skipped_duplicates,
         article_ids=[article.id for article in articles],
     )
+
+
+@router.post("/articles/upload", response_model=ImportResult)
+def upload_articles(file: UploadFile = File(...), db: Session = Depends(get_db)) -> ImportResult:
+    try:
+        data = file.file.read(MAX_IMPORT_BYTES + 1)
+        if len(data) > MAX_IMPORT_BYTES:
+            raise HTTPException(status_code=413, detail="文件不能超过 2 MiB")
+        articles, skipped = ImportService().import_bytes(db, file.filename or "", data)
+        return ImportResult(imported=len(articles), skipped_duplicates=skipped,
+                            article_ids=[article.id for article in articles])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        file.file.close()
 
 
 @router.post("/articles/ingest-clean", response_model=CleanArticleIngestResult)
