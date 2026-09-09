@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.services.article_identity import compute_content_hash
 
 
 class UserProfile(Base):
@@ -30,6 +31,7 @@ class UserProfile(Base):
 
 class Article(Base):
     __tablename__ = "articles"
+    __table_args__ = (UniqueConstraint("content_hash", name="uq_articles_content_hash"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     title: Mapped[str] = mapped_column(String(255), index=True)
@@ -37,11 +39,19 @@ class Article(Base):
     author: Mapped[str] = mapped_column(String(120), default="")
     published_at: Mapped[str] = mapped_column(String(64), default="")
     content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     url: Mapped[str] = mapped_column(String(500), default="")
     imported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
 
     opportunities: Mapped[list["Opportunity"]] = relationship(back_populates="article")
+
+
+@event.listens_for(Article, "before_insert")
+@event.listens_for(Article, "before_update")
+def _set_article_identity(mapper, connection, article: Article) -> None:
+    # All ORM writes derive identity locally, including scripts and tests.
+    article.content_hash = compute_content_hash(article.content)
 
 
 class Opportunity(Base):

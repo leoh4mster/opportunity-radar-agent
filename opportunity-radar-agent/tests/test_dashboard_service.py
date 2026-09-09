@@ -40,7 +40,7 @@ class DashboardServiceTest(unittest.TestCase):
         self.session.flush()
 
         processed = Article(title="已处理文章", content="正文", processed=True)
-        waiting = Article(title="待处理文章", content="正文", processed=False)
+        waiting = Article(title="待处理文章", content="待处理正文", processed=False)
         self.session.add_all([processed, waiting])
         self.session.flush()
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import Article
 from app.schemas.dto import ArticleCreate
-from app.services.article_identity import compute_content_hash
+from app.services.article_store import insert_article_once
 
 
 MAX_IMPORT_BYTES = 2 * 1024 * 1024
@@ -19,8 +19,7 @@ SUPPORTED_SUFFIXES = {".json", ".md", ".markdown", ".txt"}
 class ImportService:
     """Validate a whole batch before writing; commit or roll back atomically.
 
-    Sequential imports are idempotent. Concurrent imports still require a
-    database unique constraint (see docs/QUALITY.md).
+    A database unique constraint arbitrates concurrent imports across entrypoints.
     """
 
     def import_file(self, db: Session, path: str) -> tuple[list[Article], int]:
@@ -72,21 +71,14 @@ class ImportService:
             validated.append(article)
 
         try:
-            existing_hashes = {
-                compute_content_hash(content or "")
-                for (content,) in db.query(Article.content).all()
-            }
             articles = []
             skipped = 0
             for article_in in validated:
-                content_hash = compute_content_hash(article_in.content)
-                if content_hash in existing_hashes:
+                article, created = insert_article_once(db, Article(**article_in.model_dump()))
+                if not created:
                     skipped += 1
                     continue
-                article = Article(**article_in.model_dump())
-                db.add(article)
                 articles.append(article)
-                existing_hashes.add(content_hash)
             db.commit()
         except Exception:
             db.rollback()

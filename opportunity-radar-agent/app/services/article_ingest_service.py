@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.entities import Article
 from app.schemas.dto import CleanArticleIngestRequest
 from app.services.article_identity import compute_content_hash
+from app.services.article_store import insert_article_once
 from app.services.extraction_service import ExtractionService
 
 
@@ -54,18 +55,6 @@ class ArticleIngestService:
         # Client metadata is not authoritative: derive identity from the text.
         content_hash = compute_content_hash(content)
 
-        existing_articles = db.query(Article).all()
-        for article in existing_articles:
-            if compute_content_hash(article.content or "") == content_hash:
-                logger.info("duplicate clean article article_id=%s title=%s", article.id, article.title)
-                return {
-                    "created": False,
-                    "duplicate": True,
-                    "article_id": article.id,
-                    "content_hash": content_hash,
-                    "message": "duplicate",
-                }
-
         title = (payload.title or "").strip()
         if not title:
             title = guess_title_from_content(content)
@@ -80,9 +69,17 @@ class ArticleIngestService:
             processed=False,
         )
 
-        db.add(article)
-        db.flush()
-        db.refresh(article)
+        article, created = insert_article_once(db, article)
+        if not created:
+            article_id = article.id
+            db.commit()  # Release the duplicate request's transaction/SQLite lock.
+            return {
+                "created": False,
+                "duplicate": True,
+                "article_id": article_id,
+                "content_hash": content_hash,
+                "message": "duplicate",
+            }
 
         created_opportunities = ExtractionService().process_article(db, article, commit=False)
         db.commit()
