@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class LLMService:
-    def __init__(self, gateway: LLMGateway | None = None) -> None:
+    def __init__(self, gateway: LLMGateway | None = None, allow_local_fallback: bool = True) -> None:
         self.gateway = gateway if gateway is not None else LLMGateway()
+        self.allow_local_fallback = allow_local_fallback
 
     def extract_opportunities(self, article_title: str, article_content: str) -> list[dict[str, Any]]:
         if not self.gateway.is_configured():
@@ -47,6 +48,8 @@ benefit/cost/credibility 是 0 到 1 的数字。
             )
             return self._parse_json_array(text)
         except Exception as exc:
+            if not self.allow_local_fallback:
+                raise
             runtime_metrics.llm_fallback("extract_opportunities", "remote_error")
             logger.warning("remote extraction unavailable; using local rules error_type=%s", type(exc).__name__)
             return self._rule_extract(article_title, article_content)

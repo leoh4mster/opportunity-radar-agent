@@ -37,6 +37,9 @@ mouse+catch/deepseek_screenshot.png
 *.sqlite
 *.sqlite3
 
+# Private evaluation corpora, annotations, and reports
+opportunity-radar-agent/evaluation/private/
+
 # Build output
 build/
 dist/

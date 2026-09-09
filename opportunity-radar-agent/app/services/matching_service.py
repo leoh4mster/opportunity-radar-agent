@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 import logging
 
@@ -38,8 +38,11 @@ SCORE_WEIGHTS = {
 
 
 class MatchingService:
-    def __init__(self) -> None:
-        self.llm = LLMService()
+    def __init__(self, llm: LLMService | None = None, today: date | None = None,
+                 strict_llm: bool = False) -> None:
+        self.llm = llm if llm is not None else LLMService()
+        self.today = today
+        self.strict_llm = strict_llm
 
     def generate_for_user(self, db: Session, user_id: int, force: bool = True) -> list[Recommendation]:
         try:
@@ -86,6 +89,8 @@ class MatchingService:
                     )
                 except Exception as exc:
                     db.rollback()
+                    if self.strict_llm:
+                        raise
                     logger.exception(
                         "recommendation opportunity skipped user_id=%s opportunity_id=%s error_type=%s",
                         user_id,
@@ -177,6 +182,8 @@ class MatchingService:
                 base_scores=base_scores,
             )
         except Exception as exc:
+            if self.strict_llm:
+                raise
             runtime_metrics.llm_fallback("analyze_recommendation", "remote_error")
             logger.exception(
                 "recommendation llm fallback opportunity_id=%s error_type=%s",
@@ -305,7 +312,7 @@ class MatchingService:
         parsed = self._parse_date(deadline)
         if not parsed:
             return "unknown", "未识别到明确截止时间，建议先核验原文或报名入口。", None
-        days = (parsed.date() - datetime.utcnow().date()).days
+        days = (parsed.date() - self._today()).days
         if days < 0:
             return "expired", f"已在 {abs(days)} 天前截止，不建议作为高优先级行动。", days
         if days <= 3:
@@ -329,13 +336,16 @@ class MatchingService:
             if len(groups) == 3:
                 year, month, day = groups
             else:
-                year = str(datetime.utcnow().year)
+                year = str(self._today().year)
                 month, day = groups
             try:
                 return datetime(int(year), int(month), int(day))
             except ValueError:
                 return None
         return None
+
+    def _today(self) -> date:
+        return self.today if self.today is not None else datetime.utcnow().date()
 
     def _credibility_score(self, opportunity: Opportunity) -> float:
         if opportunity.verification_status and opportunity.credibility_score is not None:

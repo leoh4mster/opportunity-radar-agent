@@ -87,7 +87,8 @@ cd opportunity-radar-agent
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 python -m evaluation.run --check
-python -m compileall -q app frontend migrations tests
+python -m evaluation.real_data evaluate ranking evaluation/ranking_cases.jsonl --mode rules --k 3 --baseline evaluation/ranking_baseline.json
+python -m compileall -q app evaluation frontend migrations tests
 ```
 
 GitHub Actions 会在 Python 3.9 和 3.12 上自动执行同一套检查。
@@ -95,6 +96,8 @@ GitHub Actions 会在 Python 3.9 和 3.12 上自动执行同一套检查。
 页面左侧现在可直接上传 JSON / TXT / Markdown，支持 UTF-8 BOM，最多 2 MiB、500 篇。批次先整体校验再写入，重复导入会跳过。接口及评测指标说明见 [QUALITY.md](docs/QUALITY.md)。
 
 每个 API 响应都带 `X-Request-ID`，后端默认输出不含正文、查询参数和密钥的 JSON 日志。总览页的「工程运行状态」展示当前进程的 API、错误、耗时、模型调用和本地回退；语义与限制见 [OBSERVABILITY.md](docs/OBSERVABILITY.md)。
+
+真实数据评测采用 Git 忽略的本地标注集：可从 SQLite 导出文章和候选机会，用独立的 Streamlit 工作台标注，再计算多机会抽取与推荐排序指标。当前已准备 9 篇文章和 1 组候选，但尚未完成人工标签，因此不会宣称真实准确率。完整流程见 [EVALUATION.md](docs/EVALUATION.md)。
 
 ## 数据库升级与备份
 

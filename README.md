@@ -110,7 +110,7 @@ cd opportunity-radar-agent
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 python -m evaluation.run --check
-python -m compileall -q app frontend
+python -m compileall -q app evaluation frontend migrations tests
 ```
 
 GitHub Actions 会在 Python 3.9 和 3.12 上自动执行测试与编译检查。当前测试重点覆盖：
@@ -150,6 +150,7 @@ GitHub Actions 会在 Python 3.9 和 3.12 上自动执行测试与编译检查�
 - [x] Alembic 数据库迁移、自动备份与文章并发去重
 - [x] 结构化日志、请求追踪与模型调用指标
 - [x] 建立离线抽取合成回归集和 CI 基线检查
-- [ ] 建立真实文章与推荐排序评测集，比较规则和模型效果
+- [x] 建立真实数据导出、人工标注、多机会抽取和推荐排序评测工具链
+- [ ] 完成并扩充真实人工标注，使用自己的 Key 比较规则和 DeepSeek
 - [ ] 增加用户登录、权限隔离和可部署版本
 - [ ] 补充真实产品截图和演示视频

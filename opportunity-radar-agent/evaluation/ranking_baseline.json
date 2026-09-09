@@ -1,0 +1,13 @@
+{
+  "task": "ranking",
+  "dataset": "synthetic-ranking-v1",
+  "dataset_fingerprint": "2197d00f39a7503f46abf8843196c6665162fc8118ef39dea7a0696bbd6384f4",
+  "note": "Regression floors for three fictional profiles. They verify deterministic ranking behavior, not real-user quality.",
+  "minimum_metrics": {
+    "metrics.ndcg@3": 1.0,
+    "metrics.mrr": 1.0,
+    "metrics.hit_rate@3": 1.0,
+    "metrics.precision@3": 0.6667,
+    "metrics.pairwise_accuracy": 1.0
+  }
+}
