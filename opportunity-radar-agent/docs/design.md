@@ -37,6 +37,7 @@
 - author
 - published_at
 - content
+- content_hash（服务端正文身份，非空且唯一）
 - url
 - imported_at
 - processed
@@ -176,6 +177,7 @@
 - `growth_memory.memory_updater`：写入关键行为日志。
 - `growth_memory.snapshot_service`：按用户操作手动生成五部分成长记忆快照。
 - `growth_memory.memory_manager`：统一管理行为事件和成长记忆快照。
+- `core.observability`：关联请求 ID、结构化日志和单进程运行指标；不记录请求正文或模型提示词。
 
 ## 打分逻辑
 

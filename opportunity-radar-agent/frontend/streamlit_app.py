@@ -229,6 +229,10 @@ def get_dashboard_summary(user_id: int | None = None):
     return api_get(f"/dashboard/summary{suffix}")
 
 
+def get_observability_metrics():
+    return api_get("/observability/metrics")
+
+
 def run_action(opportunity_id: int, user_id: int, action: str, extra_params: dict | None = None):
     return api_post(
         f"/opportunities/{opportunity_id}/actions",
@@ -1319,6 +1323,50 @@ def render_overview_page() -> None:
         )
     else:
         st.caption("暂无机会。")
+
+    with st.expander("工程运行状态（面试演示）"):
+        try:
+            runtime = get_observability_metrics()
+        except APIClientError as exc:
+            st.caption(f"暂时无法读取运行指标：{exc}")
+        else:
+            http = runtime.get("http") or {}
+            llm = runtime.get("llm") or {}
+            status_families = http.get("status_families") or {}
+            error_count = sum(int(count or 0) for status, count in status_families.items()
+                              if status.startswith(("4", "5")))
+            runtime_cols = st.columns(4)
+            runtime_cols[0].metric("本进程 API 请求", http.get("requests_total", 0))
+            runtime_cols[1].metric("4xx / 5xx", error_count)
+            runtime_cols[2].metric("远程模型调用", llm.get("calls_total", 0))
+            runtime_cols[3].metric("本地规则回退", llm.get("fallbacks_total", 0))
+
+            route_rows = sorted(
+                http.get("routes") or [],
+                key=lambda row: float((row.get("duration_ms") or {}).get("average") or 0),
+                reverse=True,
+            )
+            if route_rows:
+                st.markdown("**路由耗时（当前进程）**")
+                st.dataframe(
+                    [{
+                        "方法": row.get("method"),
+                        "路由模板": row.get("route"),
+                        "请求数": row.get("requests", 0),
+                        "错误数": row.get("errors", 0),
+                        "平均耗时 ms": (row.get("duration_ms") or {}).get("average", 0),
+                        "最大耗时 ms": (row.get("duration_ms") or {}).get("maximum", 0),
+                    } for row in route_rows[:10]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            fallback_rows = llm.get("fallbacks") or []
+            if fallback_rows:
+                st.markdown("**模型回退原因**")
+                st.dataframe(fallback_rows, use_container_width=True, hide_index=True)
+            st.caption(
+                "指标只统计当前后端进程，重启后清零；日志和指标不保存请求正文、查询参数或 API Key。"
+            )
 
     with st.expander("推荐的 3 分钟演示路径"):
         st.markdown(

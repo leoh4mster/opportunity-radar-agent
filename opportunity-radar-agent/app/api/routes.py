@@ -5,12 +5,12 @@ import logging
 from pathlib import Path
 import threading
 import time
-import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import SessionLocal, get_db
+from app.core.observability import current_request_id, run_with_request_context, runtime_metrics
 
 from app.models.entities import (
     Article,
@@ -88,6 +88,11 @@ _recommendation_refresh_guard = threading.Lock()
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/observability/metrics")
+def observability_metrics() -> dict:
+    return runtime_metrics.snapshot()
 
 
 @router.get("/dashboard/summary", response_model=DashboardSummaryOut)
@@ -550,7 +555,7 @@ def generate_recommendations(
     force: bool = True,
     db: Session = Depends(get_db),
 ) -> list[Recommendation]:
-    request_id = str(uuid.uuid4())
+    request_id = current_request_id()
     started = time.perf_counter()
     existing = _list_recommendation_rows(db, user_id)
     if force:
@@ -559,7 +564,11 @@ def generate_recommendations(
                 logger.info("recommendation refresh already running request_id=%s user_id=%s", request_id, user_id)
                 return existing
             _recommendation_refresh_locks.add(user_id)
-        threading.Thread(target=_refresh_recommendations_background, args=(user_id, force, request_id), daemon=True).start()
+        threading.Thread(
+            target=run_with_request_context,
+            args=(request_id, _refresh_recommendations_background, user_id, force, request_id),
+            daemon=True,
+        ).start()
         logger.info("recommendation refresh scheduled request_id=%s user_id=%s existing_count=%s elapsed_ms=%s", request_id, user_id, len(existing), int((time.perf_counter() - started) * 1000))
         return existing
     try:
@@ -730,13 +739,17 @@ def opportunity_assistant_chat(payload: OpportunityAssistantChatRequest, db: Ses
 
 @router.post("/tools/opportunity-progress/{user_id}/{opportunity_id}/analyze", response_model=OpportunityProgressAnalyzeResponse)
 def analyze_opportunity_progress(user_id: int, opportunity_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = str(uuid.uuid4())
+    request_id = current_request_id()
     started = time.perf_counter()
     service = OpportunityProgressService()
     try:
         task = service.start_analysis_task(db, user_id, opportunity_id)
         if task.status == "analyzing":
-            threading.Thread(target=service.execute_analysis_task, args=(task.id,), daemon=True).start()
+            threading.Thread(
+                target=run_with_request_context,
+                args=(request_id, service.execute_analysis_task, task.id),
+                daemon=True,
+            ).start()
         logger.info("opportunity progress task started request_id=%s user_id=%s opportunity_id=%s task_id=%s status=%s elapsed_ms=%s", request_id, user_id, opportunity_id, task.id, task.status, int((time.perf_counter() - started) * 1000))
         return {"success": True, "message": "AI 推进分析已开始。", "task": service.serialize_task(task)}
     except ValueError as exc:
@@ -755,7 +768,7 @@ def get_opportunity_progress_task(task_id: int, db: Session = Depends(get_db)) -
     service = OpportunityProgressService()
     task = db.get(OpportunityProgressTask, task_id)
     if not task:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": "推进任务不存在", "request_id": str(uuid.uuid4())})
+        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": "推进任务不存在", "request_id": current_request_id()})
     return {"success": True, "message": "ok", "task": service.serialize_task(task)}
 
 
@@ -775,12 +788,16 @@ def get_latest_opportunity_progress_task(user_id: int, opportunity_id: int, db: 
 
 @router.post("/tools/opportunity-progress/tasks/{task_id}/web-check")
 def start_task_web_check(task_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = str(uuid.uuid4())
+    request_id = current_request_id()
     service = OpportunityProgressService()
     try:
         check = service.start_web_check_for_task(db, task_id, request_id=request_id)
         if check.status == "searching":
-            threading.Thread(target=service.execute_web_check, args=(check.id,), daemon=True).start()
+            threading.Thread(
+                target=run_with_request_context,
+                args=(request_id, service.execute_web_check, check.id),
+                daemon=True,
+            ).start()
         logger.info("progress web check scheduled request_id=%s check_id=%s task_id=%s", request_id, check.id, task_id)
         return {"success": True, "message": "联网核实已开始。", "web_check": service.serialize_web_check(check)}
     except ValueError as exc:
@@ -792,12 +809,16 @@ def start_task_web_check(task_id: int, db: Session = Depends(get_db)) -> dict:
 
 @router.post("/tools/opportunity-progress/plans/{plan_id}/web-check")
 def start_plan_web_check(plan_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = str(uuid.uuid4())
+    request_id = current_request_id()
     service = OpportunityProgressService()
     try:
         check = service.start_web_check_for_plan(db, plan_id, request_id=request_id)
         if check.status == "searching":
-            threading.Thread(target=service.execute_web_check, args=(check.id,), daemon=True).start()
+            threading.Thread(
+                target=run_with_request_context,
+                args=(request_id, service.execute_web_check, check.id),
+                daemon=True,
+            ).start()
         logger.info("progress web check scheduled request_id=%s check_id=%s plan_id=%s", request_id, check.id, plan_id)
         return {"success": True, "message": "联网核实已开始。", "web_check": service.serialize_web_check(check)}
     except ValueError as exc:
@@ -813,7 +834,7 @@ def get_progress_web_check(check_id: int, db: Session = Depends(get_db)) -> dict
     try:
         return {"success": True, "web_check": service.serialize_web_check(service.get_web_check(db, check_id))}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": str(uuid.uuid4())}) from exc
+        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": current_request_id()}) from exc
 
 
 @router.get("/tools/opportunity-progress/tasks/{task_id}/web-check")

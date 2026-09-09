@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from app.services.llm_gateway import LLMGateway
+from app.core.observability import runtime_metrics
 
 
 CATEGORIES = ["竞赛", "实习", "科研", "实验室招募", "讲座", "夏令营", "奖学金", "课程", "出国", "保研", "其他"]
@@ -20,6 +21,7 @@ class LLMService:
 
     def extract_opportunities(self, article_title: str, article_content: str) -> list[dict[str, Any]]:
         if not self.gateway.is_configured():
+            runtime_metrics.llm_fallback("extract_opportunities", "not_configured")
             return self._rule_extract(article_title, article_content)
         system = "你是信息抽取助手。只输出 JSON 数组，不要 Markdown，不要额外解释。"
         user = f"""
@@ -45,6 +47,7 @@ benefit/cost/credibility 是 0 到 1 的数字。
             )
             return self._parse_json_array(text)
         except Exception as exc:
+            runtime_metrics.llm_fallback("extract_opportunities", "remote_error")
             logger.warning("remote extraction unavailable; using local rules error_type=%s", type(exc).__name__)
             return self._rule_extract(article_title, article_content)
 
@@ -52,6 +55,7 @@ benefit/cost/credibility 是 0 到 1 的数字。
         if not recommendations:
             return "本期没有发现可推荐的机会。可以继续导入文章，或调整用户画像。"
         if not self.gateway.is_configured():
+            runtime_metrics.llm_fallback("summarize_recommendations", "not_configured")
             return self._rule_summary(profile, recommendations)
         system = "你是个性化机会雷达 Agent。请输出简洁中文摘要。"
         user = f"""
@@ -80,6 +84,7 @@ benefit/cost/credibility 是 0 到 1 的数字。
         base_scores: dict[str, float],
     ) -> dict[str, Any]:
         if not self.gateway.is_configured():
+            runtime_metrics.llm_fallback("analyze_recommendation", "not_configured")
             return self._rule_recommendation_analysis(profile, opportunity, base_scores)
         system = "你是机会推荐排序助手。只输出 JSON 对象，不要 Markdown，不要额外解释。"
         user = f"""

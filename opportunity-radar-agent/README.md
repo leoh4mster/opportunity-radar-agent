@@ -25,6 +25,7 @@ opportunity-radar-agent/
   frontend/            Streamlit 前端
   data/                可直接导入的示例公众号文章
   docs/                设计说明
+  migrations/          Alembic 历史版本与冻结的初始结构
   requirements.txt     Python 依赖
 ```
 
@@ -76,6 +77,7 @@ cd opportunity-radar-agent
 - API 文档：http://127.0.0.1:8000/docs
 - 健康检查：http://127.0.0.1:8000/health
 - 总览接口：http://127.0.0.1:8000/dashboard/summary
+- 运行指标：http://127.0.0.1:8000/observability/metrics
 
 ## 运行测试
 
@@ -85,12 +87,31 @@ cd opportunity-radar-agent
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 python -m evaluation.run --check
-python -m compileall -q app frontend
+python -m compileall -q app frontend migrations tests
 ```
 
 GitHub Actions 会在 Python 3.9 和 3.12 上自动执行同一套检查。
 
 页面左侧现在可直接上传 JSON / TXT / Markdown，支持 UTF-8 BOM，最多 2 MiB、500 篇。批次先整体校验再写入，重复导入会跳过。接口及评测指标说明见 [QUALITY.md](docs/QUALITY.md)。
+
+每个 API 响应都带 `X-Request-ID`，后端默认输出不含正文、查询参数和密钥的 JSON 日志。总览页的「工程运行状态」展示当前进程的 API、错误、耗时、模型调用和本地回退；语义与限制见 [OBSERVABILITY.md](docs/OBSERVABILITY.md)。
+
+## 数据库升级与备份
+
+后端和 `python -m app.seed` 启动时会自动执行 Alembic 升级，不再用临时 `ALTER TABLE` 补字段。
+已有 SQLite 升级前自动备份到数据库旁的 `.backups/`；保留文章、机会、推荐及其 ID。
+重复启动不重复迁移或备份。旧库若存在重复正文，会报告冲突文章 ID 并回滚，不自动删除或合并。
+
+更新代码后先安装新增依赖，再重启后端：
+
+```bash
+python -m pip install -r requirements.txt
+python -m app.core.migrations current
+python -m app.core.migrations upgrade
+```
+
+也可使用 `python -m alembic current`、`python -m alembic upgrade head`。
+执行迁移前应停止其他写入该数据库的进程。详细备份恢复、开发流程与限制见 [数据库迁移说明](docs/DATABASE.md)。
 
 ## 可选：配置你自己的 DeepSeek
 

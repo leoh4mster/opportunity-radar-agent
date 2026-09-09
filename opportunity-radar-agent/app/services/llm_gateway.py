@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app.core.config import get_settings
+from app.core.observability import runtime_metrics
 
 
 logger = logging.getLogger(__name__)
@@ -66,14 +67,19 @@ class LLMGateway:
         max_retries: int = 2,
         response_format: dict[str, Any] | None = None,
     ) -> str:
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
         provider = (self.settings.llm_provider or "").lower().strip()
         if provider == "mock":
+            runtime_metrics.llm_call(provider, "", "rejected")
             raise LLMBadRequestError("LLM_PROVIDER=mock is not allowed in production.")
         if provider != "deepseek":
+            runtime_metrics.llm_call(provider or "unset", "", "rejected")
             raise LLMBadRequestError("Unsupported LLM_PROVIDER: {}".format(provider))
 
         api_key, endpoint, model = self._provider_config(provider)
         if not api_key:
+            runtime_metrics.llm_call(provider, model, "rejected")
             raise LLMAuthError("{} API key is missing.".format(provider))
         self._log_config(provider, endpoint, model, bool(api_key))
 
@@ -87,21 +93,47 @@ class LLMGateway:
 
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
+            attempt_started = time.perf_counter()
             try:
-                logger.info("llm request provider=%s endpoint=%s model=%s attempt=%s", provider, endpoint, model, attempt + 1)
+                logger.info("llm request", extra={"event": "llm_attempt_started", "provider": provider,
+                            "model": model, "attempt": attempt + 1})
                 data = self._post_json(endpoint, api_key, payload)
                 content = self._extract_content(data)
-                logger.info("llm response provider=%s model=%s chars=%s", provider, model, len(content))
+                duration_ms = (time.perf_counter() - attempt_started) * 1000
+                runtime_metrics.llm_attempt(provider, model, "success", duration_ms)
+                runtime_metrics.llm_call(provider, model, "success")
+                logger.info("llm response", extra={"event": "llm_attempt_completed", "provider": provider,
+                            "model": model, "attempt": attempt + 1, "outcome": "success",
+                            "duration_ms": round(duration_ms, 2)})
                 return content
             except LLMGatewayError as exc:
                 last_error = exc
-                logger.exception("llm request failed provider=%s endpoint=%s model=%s attempt=%s", provider, endpoint, model, attempt + 1)
+                duration_ms = (time.perf_counter() - attempt_started) * 1000
+                error_type = type(exc).__name__
+                runtime_metrics.llm_attempt(provider, model, "failure", duration_ms, error_type)
+                logger.warning("llm request failed", extra={"event": "llm_attempt_completed",
+                               "provider": provider, "model": model, "attempt": attempt + 1,
+                               "outcome": "failure", "error_type": error_type,
+                               "duration_ms": round(duration_ms, 2)})
                 if exc.retryable and attempt < max_retries:
                     time.sleep(0.8 * (attempt + 1))
                     continue
                 break
+            except Exception as exc:
+                duration_ms = (time.perf_counter() - attempt_started) * 1000
+                error_type = type(exc).__name__
+                runtime_metrics.llm_attempt(provider, model, "failure", duration_ms, error_type)
+                runtime_metrics.llm_call(provider, model, "failure")
+                logger.warning("unexpected llm failure", extra={"event": "llm_attempt_completed",
+                               "provider": provider, "model": model, "attempt": attempt + 1,
+                               "outcome": "failure", "error_type": error_type,
+                               "duration_ms": round(duration_ms, 2)})
+                raise LLMGatewayError("Unexpected LLM client failure") from exc
 
-        raise LLMGatewayError("LLM request failed after retries: {}".format(last_error))
+        runtime_metrics.llm_call(provider, model, "failure")
+        if last_error is not None:
+            raise last_error
+        raise LLMGatewayError("LLM request failed without a provider error")
 
     def _provider_config(self, provider: str) -> tuple[str, str, str]:
         return (
@@ -133,13 +165,8 @@ class LLMGateway:
         }
 
     def _log_config(self, provider: str, endpoint: str, model: str, api_key_exists: bool) -> None:
-        logger.info(
-            "llm config provider=%s model=%s api_key_exists=%s active_endpoint=%s",
-            provider,
-            model,
-            api_key_exists,
-            endpoint,
-        )
+        logger.info("llm config loaded", extra={"event": "llm_config_loaded", "provider": provider,
+                    "model": model, "outcome": "configured" if api_key_exists else "missing_key"})
 
     def _post_json(self, endpoint: str, api_key: str, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
@@ -154,6 +181,8 @@ class LLMGateway:
         try:
             with urlopen(request, timeout=60) as response:
                 return json.loads(response.read().decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            raise LLMResponseFormatError("LLM response is not valid JSON") from exc
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             message = "LLM {} (HTTP {}): {}".format(self._http_error_reason(exc.code), exc.code, detail[:1000])
@@ -185,8 +214,10 @@ class LLMGateway:
         return "http error"
 
     def _extract_content(self, data: dict[str, Any]) -> str:
+        if not isinstance(data, dict):
+            raise LLMResponseFormatError("LLM response format error: expected object")
         choices = data.get("choices") or []
-        if not choices:
+        if not choices or not isinstance(choices[0], dict):
             raise LLMResponseFormatError("LLM response format error: no choices")
         content = choices[0].get("message", {}).get("content", "")
         if isinstance(content, list):

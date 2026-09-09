@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Opportunity Radar Agent"
     database_url: str = "sqlite:///./opportunity_radar.db"
+    log_level: str = "INFO"
+    log_format: str = "json"
+    slow_request_ms: int = 1000
 
     # DeepSeek is optional. Core import and recommendation flows fall back to
     # deterministic local rules when no API key is configured.

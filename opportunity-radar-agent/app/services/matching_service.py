@@ -13,6 +13,7 @@ from app.services.feedback_service import FeedbackService
 from app.services.growth_memory.memory_manager import GrowthMemoryManager
 from app.services.json_utils import dumps, loads_dict, loads_list
 from app.services.llm_service import LLMService
+from app.core.observability import runtime_metrics
 from app.services.opportunity_state_service import OpportunityStateService
 
 
@@ -176,6 +177,7 @@ class MatchingService:
                 base_scores=base_scores,
             )
         except Exception as exc:
+            runtime_metrics.llm_fallback("analyze_recommendation", "remote_error")
             logger.exception(
                 "recommendation llm fallback opportunity_id=%s error_type=%s",
                 opportunity.id,
