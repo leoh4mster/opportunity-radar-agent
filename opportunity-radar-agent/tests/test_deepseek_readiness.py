@@ -50,4 +50,3 @@ class DeepSeekReadinessTest(unittest.TestCase):
         with self.assertRaises(LLMResponseFormatError):
             LLMGateway()._extract_content({'choices': [
                 {'message': {'content': '{"looks":"valid"}'}, 'finish_reason': 'length'}]})
-

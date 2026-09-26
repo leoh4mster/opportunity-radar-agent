@@ -92,4 +92,3 @@ class OpportunityQualityTest(unittest.TestCase):
             self.assertNotIn('建议报名', old.action_suggestion)
             self.assertIn('已过期', old.action_suggestion)
             self.assertEqual(future.deadline_urgency, 'unknown')
-
