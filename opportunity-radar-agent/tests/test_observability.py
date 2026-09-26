@@ -122,7 +122,8 @@ class ObservabilityTest(unittest.TestCase):
     def configured_gateway(self):
         gateway = LLMGateway()
         gateway.settings = SimpleNamespace(
-            llm_provider="deepseek", llm_model="deepseek-chat",
+            llm_provider="deepseek", llm_model="deepseek-flash",
+            llm_thinking="disabled", llm_max_tokens=4096,
             deepseek_api_key="never-log-this-key", deepseek_base_url="https://api.deepseek.com",
         )
         return gateway

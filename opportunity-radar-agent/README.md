@@ -122,20 +122,28 @@ python -m app.core.migrations upgrade
 
 ```text
 LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-flash
+LLM_THINKING=disabled
+LLM_MAX_TOKENS=4096
 DEEPSEEK_API_KEY=你自己的密钥
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 ```
 
 `.env` 已被 Git 忽略。不要把真实密钥写进 Python 文件、README、截图或提交记录。
 
-配置后可以调用 `POST /llm/test` 检查连接。
+配置后优先运行 `.venv/bin/python -m evaluation.check_deepseek --allow-network`：只发送一条虚构通知，执行一次严格远程检查。配置、真实评测和 Agent 闭环验收步骤见 [DeepSeek 接入说明](docs/DEEPSEEK.md)。
 
 ## 业务一致性更新（2026-09-26）
 
 本地规则检查现在明确标记为“未联网核验”。待办入口统一落库，每个推进子任务拥有独立待办身份；删除文章和用户会清理完整关联数据。模型输出增加严格业务校验，成长记忆快照进入增强推荐上下文。标注台采用空白人工标签和“尚未判断”选项。
 
-本地 80 项测试及合成抽取、排序基线通过。新增数据库迁移 `0003_business_integrity`，旧库升级前自动备份；历史计划项需要重新同步，原待办保留。恢复方式及历史核验修正见 [数据库说明](docs/DATABASE.md)，验收范围见 [质量说明](docs/QUALITY.md)。
+本地 93 项测试及合成抽取、排序基线通过。新增数据库迁移 `0003_business_integrity`，旧库升级前自动备份；历史计划项需要重新同步，原待办保留。恢复方式及历史核验修正见 [数据库说明](docs/DATABASE.md)，验收范围见 [质量说明](docs/QUALITY.md)。
+
+## 真实样本驱动的质量修复（2026-09-26）
+
+已完成首批 9 篇抽取、1 组排序的 AI 辅助人工确认。修复攻略误报、主办方边界、叙述句日期和字段格式；相同开发集抽取 F1 从 0.8889 提升到 1.0、字段匹配从 13/20 提升到 20/20。该批数据已用于优化，不能作为独立测试集或总体准确率。明确结束的活动会降权且不再建议报名；缺少年份、开放区间和实习开始日不会被当成明确结束时间。
+
+DeepSeek 模板已更新并增加输出预算与连通性检查，但尚未调用真实 API；真实 Agent 闭环仍待 Key 配置后验收。
 
 ## 当前能力边界
 

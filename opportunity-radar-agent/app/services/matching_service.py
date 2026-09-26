@@ -14,6 +14,7 @@ from app.services.growth_memory.memory_manager import GrowthMemoryManager
 from app.services.json_utils import dumps, loads_dict, loads_list
 from app.services.llm_service import LLMService
 from app.core.observability import runtime_metrics
+from app.services.opportunity_rules import event_end_date
 from app.services.opportunity_state_service import OpportunityStateService
 
 
@@ -164,7 +165,7 @@ class MatchingService:
             haystack,
             opportunity.category,
         )
-        deadline_urgency, deadline_note, days_until_deadline = self._deadline_info(opportunity.deadline)
+        deadline_urgency, deadline_note, days_until_deadline = self._availability_info(opportunity)
         urgency = self._urgency_from_deadline(deadline_urgency)
         benefit = max(0, min(opportunity.benefit, 1)) * 100
         cost = (1 - max(0, min(opportunity.cost, 1))) * 100
@@ -231,6 +232,8 @@ class MatchingService:
         reason = analysis.get("relevance_explanation", "") or self._reason(
             user, opportunity, relevance, urgency, relevant_memory, deadline_urgency
         )
+        if deadline_urgency == "expired":
+            reason += "（" + deadline_note + "）"
         if feedback_bias:
             direction = "加权" if feedback_bias > 0 else "降权"
             reason = f"{reason}（已根据近期反馈对同类机会{direction} {abs(feedback_delta):.1f} 分。）"
@@ -249,7 +252,8 @@ class MatchingService:
             relevance_explanation=str(analysis.get("relevance_explanation", "")),
             risk_notes=dumps(risk_notes),
             anti_recommendation_reason=self._anti_recommendation_reason(risk_notes),
-            action_suggestion=self._action_suggestion(opportunity, total, urgency),
+            action_suggestion=("机会已过期，仅作背景参考；请查找新一期通知。" if deadline_urgency == "expired"
+                               else self._action_suggestion(opportunity, total, urgency)),
             opportunity_state=opportunity_state,
             deadline=opportunity.deadline or "",
             deadline_urgency=deadline_urgency,
@@ -309,6 +313,13 @@ class MatchingService:
         if deadline_urgency == "normal":
             return 55
         return 45
+
+    def _availability_info(self, opportunity: Opportunity) -> tuple[str, str, int | None]:
+        cutoff = self._deadline_info(opportunity.deadline)
+        end = event_end_date(opportunity.event_time or "", opportunity.category)
+        if end is not None and end < self._today():
+            return "expired", f"活动已于 {end.isoformat()} 结束，仅作背景参考。", (end - self._today()).days
+        return cutoff
 
     def _deadline_info(self, deadline: str) -> tuple[str, str, int | None]:
         parsed = self._parse_date(deadline)

@@ -22,7 +22,7 @@ from app.core.observability import runtime_metrics
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODELS = {
-    "deepseek": "deepseek-chat",
+    "deepseek": "deepseek-flash",
 }
 
 
@@ -87,6 +87,8 @@ class LLMGateway:
             "model": model,
             "messages": messages,
             "temperature": temperature,
+            "thinking": {"type": self.settings.llm_thinking},
+            "max_tokens": self.settings.llm_max_tokens,
         }
         if response_format:
             payload["response_format"] = response_format
@@ -219,6 +221,8 @@ class LLMGateway:
         choices = data.get("choices") or []
         if not choices or not isinstance(choices[0], dict):
             raise LLMResponseFormatError("LLM response format error: no choices")
+        if choices[0].get("finish_reason") == "length":
+            raise LLMResponseFormatError("LLM output truncated at token limit")
         content = choices[0].get("message", {}).get("content", "")
         if isinstance(content, list):
             return "\n".join(str(item.get("text", item)) for item in content)

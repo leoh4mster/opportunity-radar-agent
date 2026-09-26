@@ -1,4 +1,6 @@
 from functools import lru_cache
+from typing import Literal
+from pydantic import Field
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,7 +15,9 @@ class Settings(BaseSettings):
     # DeepSeek is optional. Core import and recommendation flows fall back to
     # deterministic local rules when no API key is configured.
     llm_provider: str = "deepseek"
-    llm_model: str = "deepseek-chat"
+    llm_model: str = "deepseek-flash"
+    llm_thinking: Literal["disabled", "enabled"] = "disabled"
+    llm_max_tokens: int = Field(default=4096, ge=1, le=393216)
 
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
