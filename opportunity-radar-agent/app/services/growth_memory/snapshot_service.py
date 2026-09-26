@@ -11,14 +11,14 @@ from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.entities import GrowthMemorySnapshot, Opportunity, UserEvent, UserProfile
+from app.models.entities import GrowthMemorySnapshot, Opportunity, OpportunityProgressPlan, UserEvent, UserProfile
 from app.services.json_utils import dumps, loads_dict, loads_list
 from app.services.llm_gateway import LLMGateway
 
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "growth_memory_v2"
+PROMPT_VERSION = "growth_memory_v3_plan_context"
 ANALYSIS_EVENT_LIMIT = 100
 HISTORY_LIMIT = 3
 REQUIRED_FIELDS = [
@@ -88,7 +88,8 @@ class GrowthMemorySnapshotService:
         event_ids = [event.id for event in events]
         behavior_start = min(event.created_at for event in events)
         behavior_end = max(event.created_at for event in events)
-        if latest and latest.behavior_end_time and behavior_end <= latest.behavior_end_time:
+        if (latest and latest.prompt_version == PROMPT_VERSION and latest.behavior_end_time
+                and behavior_end <= latest.behavior_end_time):
             return {
                 "success": True,
                 "updated": False,
@@ -105,6 +106,16 @@ class GrowthMemorySnapshotService:
         )
         opportunity_map = self._load_related_opportunities(db, events)
         payload = self._build_model_input(user, events, opportunity_map, history)
+        plans = (db.query(OpportunityProgressPlan)
+                 .filter(OpportunityProgressPlan.user_id == user_id)
+                 .order_by(OpportunityProgressPlan.updated_at.desc()).limit(5).all())
+        payload["current_plans"] = [
+            {"opportunity_id": plan.opportunity_id, "overall_judgment": plan.overall_judgment,
+             "stage": plan.current_stage, "summary": plan.plan_summary,
+             "next_focus": plan.next_focus, "risks": loads_list(plan.risks_json),
+             "status": plan.system_status}
+            for plan in plans
+        ]
         parsed = self._call_model(payload)
         snapshot = GrowthMemorySnapshot(
             user_id=user_id,
@@ -185,6 +196,8 @@ class GrowthMemorySnapshotService:
                     "difficulty": self._difficulty(opportunity),
                     "deadline": opportunity.deadline,
                     "target_audience": opportunity.target_audience,
+                    "requirements": (opportunity.requirements or "")[:1000],
+                    "risk_flags": loads_list(opportunity.risk_flags),
                     "summary": (opportunity.summary or "")[:220],
                     "verification_status": opportunity.verification_status,
                     "user_actions": list(dict.fromkeys(actions)),
@@ -258,6 +271,9 @@ class GrowthMemorySnapshotService:
 8. 不要输出分析步骤、推理过程或内部思考。
 9. 所有内容使用中文。
 10. 全文使用第二人称“你”。
+11. current_plans 中的现有判断、来源风险和用户已确认进展必须约束行动建议；不能把“建议观察”或来源未核验的机会直接说成应立即申请。
+12. 创建待办/日历不等于已经报名、投递或核验成功；任务完成但结果未说明时保留不确定性。
+13. 用户最新明确反馈可以修正旧画像中的时间/地点偏好；核对 requirements 是否仍可满足，不要忽略投入时间冲突。
 
 请生成以下五部分：
 一、当前阶段

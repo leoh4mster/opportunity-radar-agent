@@ -4,9 +4,16 @@ from unittest.mock import patch
 from app.core.config import Settings
 from app.services.llm_gateway import LLMGateway, LLMResponseFormatError
 from evaluation.check_deepseek import check_connection
+from evaluation.check_agent_live import run_check
 
 
 class DeepSeekReadinessTest(unittest.TestCase):
+    def test_live_agent_check_requires_consent_before_creating_test_environment(self):
+        with patch('evaluation.check_agent_live.tempfile.TemporaryDirectory') as temporary:
+            with self.assertRaisesRegex(ValueError, '--allow-network'):
+                run_check(False)
+            temporary.assert_not_called()
+
     def test_probe_requires_consent_before_constructing_client(self):
         with patch('evaluation.check_deepseek.LLMGateway') as client:
             with self.assertRaisesRegex(ValueError, '--allow-network'):

@@ -384,6 +384,13 @@ class OpportunityProgressService:
         return update
 
     def confirm_plan_update(self, db: Session, plan_id: int, update_id: int) -> OpportunityProgressPlan:
+        try:
+            return self._confirm_plan_update(db, plan_id, update_id)
+        except Exception:
+            db.rollback()
+            raise
+
+    def _confirm_plan_update(self, db: Session, plan_id: int, update_id: int) -> OpportunityProgressPlan:
         plan = self.get_plan(db, plan_id)
         update = db.get(OpportunityProgressUpdate, update_id)
         if not update or update.plan_id != plan.id:
@@ -433,6 +440,22 @@ class OpportunityProgressService:
             if change.get("new_priority") in {"high", "medium", "low"}:
                 item.priority = change["new_priority"]
             item.updated_at = now
+            if item.synced_to_todo and item.todo_id:
+                todo = db.get(Todo, item.todo_id)
+                if (todo is None or todo.user_id != plan.user_id or
+                        todo.opportunity_id != plan.opportunity_id or todo.task_key != f"plan-item:{item.id}"):
+                    raise ValueError("计划任务的关联待办身份不一致，请重新同步后再确认")
+                if change_type == "modify":
+                    if change.get("new_title"):
+                        todo.title = item.title
+                    if change.get("new_description"):
+                        opportunity = db.get(Opportunity, plan.opportunity_id)
+                        todo.description = self._todo_description_from_plan_item(item, opportunity)
+                if change_type in {"complete", "pause", "mark_no_longer_applicable"}:
+                    todo.status = item.status
+                if change.get("new_priority") in {"high", "medium", "low"}:
+                    todo.priority = item.priority
+                todo.updated_at = now
 
         for task in proposed.get("new_tasks") or []:
             if not isinstance(task, dict):
@@ -1139,7 +1162,7 @@ class OpportunityProgressService:
                 "stop_reason": None,
             },
             "rules": [
-                "最多 5 轮，信息足够时提前停止。",
+                f"最多 {MAX_ROUNDS} 轮，信息足够时提前停止。",
                 "信息源核查只能分析已有来源、链接、发布时间、字段一致性。",
                 "如果只能确认文章来源，必须说明当前只能确认文章来源，尚无法确认官方信息。",
                 "没有本地同类机会时跳过比较并说明数据不足。",

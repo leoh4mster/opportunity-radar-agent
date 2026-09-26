@@ -103,7 +103,7 @@ class MatchingService:
             if not recommendations:
                 logger.warning("recommendations refresh produced no rows; keep previous user_id=%s", user_id)
                 return existing_query.all()
-            db.query(Recommendation).filter(Recommendation.user_id == user_id).delete(synchronize_session=False)
+            db.query(Recommendation).filter(Recommendation.user_id == user_id).delete(synchronize_session="fetch")
             for recommendation in recommendations:
                 db.add(recommendation)
                 state_service.advance_state(db, user_id, recommendation.opportunity_id, "recommended")

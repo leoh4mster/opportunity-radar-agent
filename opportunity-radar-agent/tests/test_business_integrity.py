@@ -14,6 +14,7 @@ from app.main import app
 from app.models import entities as m
 from app.services.opportunity_agent import OpportunityAgent
 from app.services.opportunity_progress_service import OpportunityProgressService
+from app.services.json_utils import dumps
 
 
 class BusinessIntegrityTest(unittest.TestCase):
@@ -131,6 +132,53 @@ class BusinessIntegrityTest(unittest.TestCase):
         self.db.commit()
         self.assertEqual(self.db.query(m.Todo).count(), 0)
         self.assertTrue(all(not item.synced_to_todo for item in self.db.query(m.OpportunityProgressItem)))
+
+    def test_confirmed_plan_changes_update_only_linked_child_todos(self):
+        general_id = self.action('todo')['result']['todo_id']
+        plan, items = self.make_plan()
+        service = OpportunityProgressService()
+        service.sync_plan_items_to_todos(self.db, plan.id, [item.id for item in items])
+        update = m.OpportunityProgressUpdate(plan_id=plan.id, proposed_changes_json=dumps({
+            'task_changes': [{'task_id': items[0].id, 'change_type': 'complete'},
+                             {'task_id': items[1].id, 'change_type': 'modify', 'new_title': '修订材料',
+                              'new_description': '补充项目评测报告', 'new_priority': 'high'}]}))
+        self.db.add(update); self.db.commit()
+        self.assertEqual(self.db.get(m.Todo, items[0].todo_id).status, 'pending')
+        service.confirm_plan_update(self.db, plan.id, update.id)
+        self.assertEqual(self.db.get(m.Todo, items[0].todo_id).status, 'completed')
+        changed = self.db.get(m.Todo, items[1].todo_id)
+        self.assertEqual(changed.title, '修订材料')
+        self.assertIn('补充项目评测报告', changed.description)
+        self.assertEqual(changed.priority, 'high')
+        self.assertEqual(self.db.get(m.Todo, general_id).status, 'pending')
+
+    def test_plan_confirmation_failure_rolls_back_items_todos_and_version(self):
+        plan, items = self.make_plan()
+        service = OpportunityProgressService()
+        service.sync_plan_items_to_todos(self.db, plan.id, [items[0].id])
+        update = m.OpportunityProgressUpdate(plan_id=plan.id, proposed_changes_json=dumps({
+            'task_changes': [{'task_id': items[0].id, 'change_type': 'complete'}]}))
+        self.db.add(update); self.db.commit()
+        with patch.object(service, '_save_plan_version', side_effect=RuntimeError('save failure')):
+            with self.assertRaises(RuntimeError):
+                service.confirm_plan_update(self.db, plan.id, update.id)
+        self.db.commit()
+        self.assertEqual(items[0].status, 'pending')
+        self.assertEqual(self.db.get(m.Todo, items[0].todo_id).status, 'pending')
+        self.assertEqual(plan.version_number, 1)
+        self.assertEqual(update.confirmation_status, 'pending')
+
+    def test_invalid_todo_link_cannot_modify_general_or_other_users_task(self):
+        general_id = self.action('todo')['result']['todo_id']
+        plan, items = self.make_plan()
+        items[0].todo_id, items[0].synced_to_todo = general_id, True
+        update = m.OpportunityProgressUpdate(plan_id=plan.id, proposed_changes_json=dumps({
+            'task_changes': [{'task_id': items[0].id, 'change_type': 'complete'}]}))
+        self.db.add(update); self.db.commit()
+        with self.assertRaisesRegex(ValueError, '身份不一致'):
+            OpportunityProgressService().confirm_plan_update(self.db, plan.id, update.id)
+        self.assertEqual(self.db.get(m.Todo, general_id).status, 'pending')
+        self.assertEqual(items[0].status, 'pending')
 
     def populate_graph(self):
         self.action("todo")
