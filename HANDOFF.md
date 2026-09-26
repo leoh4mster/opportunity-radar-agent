@@ -2,265 +2,190 @@
 
 最后更新：2026-09-26（Asia/Shanghai）
 
-## 0. 2026-09-26 业务正确性修复与当前进度
+本文是当前状态与后续执行依据，已替换 2026-09-16 的旧交接状态。除特别说明，应用文件路径均相对于 `opportunity-radar-agent/`。
 
-本节为最新状态；后面的 1–9 节保留 2026-09-16 交接背景，旧测试数、迁移版本、端口状态和提交状态不代表现在。
+## 1. 当前结论与项目定位
 
-### 已完成
+项目已完成本地产品主流程、业务一致性修复、人工标注工具链及首批用户确认标签，并接入用户自己的 DeepSeek Key。真实模型参与的服务链已用虚构数据和临时数据库验收通过。下一步重点是浏览器实际操作验收、真实语料对比与独立保留集，以及可靠后台任务。
 
-- 本地核验不再生成占位证据、可信度分数或真实 `verified` 状态；原文链接不再直接补为官网或报名链接。
-- 待办 action 和旧工具入口统一调用实际持久化服务；待办、状态、行为和日志在同一事务内提交。
-- 计划子任务通过 `task_key=plan-item:<ID>` 与机会总待办区分，重复同步幂等、整批失败回滚。
-- 删除文章或用户清理完整关联图，包括日历、推进任务/计划/版本/更新；运行时开启 SQLite 外键约束。
-- 新增迁移 `0003_business_integrity`，保留旧待办与推荐 ID；历史计划项恢复为待同步。明确属于本地规则的旧核验被降为 `rule_checked`，撤销旧加权，建议刷新推荐。
-- 推荐使用最新 `GrowthMemorySnapshot` 作为增强模型上下文，携带版本；本地模式仍使用规则和反馈加权。记忆输入保留明确反馈文字。
-- 模型结果增加字段、类型、数值范围和有限值校验；摘要验证失败不会误返回成功；严格评测模式无配置时拒绝规则回退。
-- 标注台不预填模型答案；排序必须逐项明确判断，切换记录隔离控件状态。
-
-### 验证与数据边界
-
-- 本机 Python 3.9.6：99 项测试通过，含完整 API 流程、故障回滚和 Streamlit 控件测试。
-- 合成抽取 15 例 F1 1.0、字段 40/40；排序 3 组 NDCG@3 1.0、Precision@3 0.6667。
-- 已对现有个人 SQLite 的临时副本完成升级演练，业务记录数量保持一致、外键检查无违规；测试不修改个人数据库。
-- 用户已在 `evaluation/private/review-2026-09-26/` 完成 9 篇抽取、1 组排序的首次确认（labeled，不是二次 reviewed）。原始队列仍未标注，后续请用复核目录。
-- 修复前真实规则报告位于该目录 `reports/rules-20260926T061741Z/`。修复后同批开发集 F1 0.8889→1.0、字段 13/20→20/20；排序 NDCG@3 仍 1.0、Precision@3 仍 0.3333。该批已用于调试，不能声称独立泛化性能。
-- 新增主办方/字段/叙述日期抽取与攻略/回顾/取消边界；明确结束活动降权且不建议报名。未知年份和不完整区间保守处理；尚未实现推荐展示过滤，也不会重写历史机会数据。
-- DeepSeek Key 已由用户配置并转存到 Git 忽略的 .env，模板已清空。deepseek-flash 的真实连通检查通过；不要输出或提交密钥。
-- 已完成真实 API 服务链验收（虚构数据/临时库）：初测 12 请求后发现计划完成但待办 pending；修复后复测 9 阶段通过、12 请求、32 秒、19,295 tokens、零回退。原始报告在 evaluation/private/agent-live/；没有外发私人正文或画像。
-- 已修复确认计划时关联待办状态/内容同步、失败回滚、推荐刷新会话对象冲突；记忆 prompt v3 带当前计划判断/风险，提示词版本变化会触发再生成。
-- 可重复命令：python -m evaluation.check_agent_live --allow-network（默认最多 16 次 HTTP 请求）。测试模拟用户确认、同步调用 worker，并非已实现完全自主工具循环或后台恢复。详见 docs/DEEPSEEK.md。
-- 本轮用户已授权完成检查后提交并推送 GitHub。提交和 CI 结果以 Git 历史及 GitHub Actions 为准，不把测试结果当作远程 CI 已通过。
-
-### 后续执行顺序
-
-1. Key 连通与虚构服务链已通过；下一步在明确同意正文/画像外发及费用后比较真实人工标注集上的 DeepSeek 与规则效果。同时扩充独立保留集和二次标注复查，再验收浏览器交互、失败重试及恢复。
-2. 可靠任务机制：文章先落库、调用移出写事务，增加原子领取、租约、有限重试与重启恢复。现有 daemon thread 和进程内锁尚未重构。
-3. 独立 Collector：先纯 Python 数据与传输边界、持久化补传、dry-run 和假 transport 测试，再接剪贴板/GUI/OCR。旧采集器仍不能作为可靠自动采集链路。
-4. 日期/时区、列表分页和前端拆分；随后按实际部署目标补认证、权限隔离与部署方案。
-
-启动与人工标注命令仍见下文；新迁移不能自动 downgrade 合并待办，回退须使用升级前备份和对应旧代码，详见 `opportunity-radar-agent/docs/DATABASE.md`。
-
-## 1. 当前任务与目标
-
-把最初从小组 GitHub 仓库取得的 AI Agent 代码，清理为用户本人可完全控制、无需原作者权限也能运行的独立项目，并持续完善为可用于实习/求职面试展示的代表项目。
-
-项目定位不是普通文章摘要工具，而是一条可持续运行的机会决策链：
+产品目标是将公众号文章和本地文件转化为可执行的机会决策：
 
 ```text
-公众号文章 / 本地文件
-  → 结构化机会抽取
-  → 用户画像匹配与排序
-  → 风险核验、待办和日历
-  → 行为反馈
-  → 成长记忆与下一步建议
+文章导入 → 机会抽取 → 画像匹配与解释 → 推进计划
+    → 用户确认 → 待办 / 日历 → 进度反馈 → 成长记忆 → 新推荐
 ```
 
-当前阶段的重点已经从“能运行”推进到“结果可验证、工程过程可解释”。最近完成的是人工标注与真实数据评测工具链；下一项拟进行的工程工作是整理桌面采集实验并形成独立 Collector 模块。
+当前属于应用服务编排的 Agent 工作流：模型负责抽取、判断、建议、规划和记忆，服务负责校验及实际落库。尚未实现模型自主选择工具、读取执行结果并循环决策的通用工具调用机制。真实 API 可用不等于真实业务效果、浏览器交互和后台恢复全部通过。
 
-## 2. 仓库与运行状态
+## 2. 仓库与验证基准
 
-- 工作区根目录：`/Users/zhouyuehan/Documents/code/Agent-wechat-summary`
-- 主应用目录：`opportunity-radar-agent/`
-- 当前分支：`main`
-- 远程仓库：`https://github.com/leoh4mster/opportunity-radar-agent.git`
-- 当前提交：`1e77444 feat: add human-labeled evaluation workflow`
-- `main` 与 `origin/main` 已同步。
-- 创建本文档前 Git 工作区干净；`HANDOFF.md` 是本次新增文件。
-- 最近一次确认的 GitHub Actions：Python 3.9、3.12 均通过。
-  - Run：<https://github.com/leoh4mster/opportunity-radar-agent/actions/runs/34331166219>
-- 最近一次本地全量测试：54 项通过。
-- 截至 2026-09-16，本机仍有进程监听：
-  - FastAPI：`127.0.0.1:8000`
-  - Streamlit 主界面：`127.0.0.1:8501`
-  - Streamlit 人工标注台：`127.0.0.1:8502`
+- 工作区：`/Users/zhouyuehan/Documents/code/Agent-wechat-summary`
+- 主应用：`opportunity-radar-agent/`
+- 分支：`main`
+- GitHub：<https://github.com/leoh4mster/opportunity-radar-agent>
+- 最新功能提交：`ee3ad3a`（计划与待办同步修复、真实模型服务链验收）。后续文档提交以 `git log` 为准。
+- 该功能提交已推送；Python 3.9、3.12 CI 均成功：[Actions 运行记录](https://github.com/leoh4mster/opportunity-radar-agent/actions/runs/36251422032)。
+- 最近本机全量测试：Python 3.9.6，**99 项通过**。
+- 合成抽取回归：15 例，F1 = 1.0，字段匹配 40/40。
+- 合成排序回归：3 组，NDCG@3 = 1.0，Precision@3 = 0.6667。
 
-端口监听只是当前机器状态，不应假设下次会话仍在运行。访问失败时先重启相应服务。
+上述回归成绩不能作为真实业务准确率。代码推送也不代表本机服务已重启或个人数据库已升级；继续工作时重新检查端口、进程和数据库版本。
 
-## 3. 已完成内容
+## 3. 已完成的工程工作
 
-### 3.1 项目归属与安全清理
+### 3.1 基础产品、导入与可观测性
 
-- 已迁移到用户自己的 GitHub 仓库和提交历史，当前历史从安全导入提交开始。
-- 旧开发者的密钥不再存在于当前代码配置中。
-- `.env`、数据库、日志、虚拟环境、采集截图及私有评测数据均被 Git 忽略。
-- `.env.example` 只保留空配置模板。
-- DeepSeek、博查搜索和微信 MCP 都是可选依赖；没有 Key 时基础流程仍能运行。
-- 曾经公开过的旧密钥仍应视为已泄露，由原密钥持有人在对应平台撤销；清理 Git 历史不能让已经暴露的密钥重新安全。
+- 已迁移至用户自己的仓库，支持离线规则模式；外部服务均为可选配置。
+- Streamlit 支持总览、画像、文章、机会、推荐、反馈、待办、日历、成长记忆和人工标注台。
+- 支持 JSON / TXT / Markdown 上传，包括 UTF-8 BOM；单文件 2 MiB、最多 500 篇，批次整体校验、失败回滚。
+- 服务端规范化正文并计算 SHA-256，持久化唯一约束；上传、路径导入、采集接口统一去重。已测试 8 个并发请求只创建一篇文章并抽取一次。
+- Alembic 迁移、一致性备份、并发迁移串行化、SQLite WAL 和保存点已有覆盖。
+- HTTP 请求携带 `X-Request-ID`，结构化日志记录耗时、错误、模型重试与回退原因，默认不记录正文、提示词或密钥。
+- `/observability/metrics` 是单进程内存指标，重启清零，尚未接入生产监控。
 
-### 3.2 产品总览与基础体验
+### 3.2 业务正确性与数据库迁移
 
-- 增加 Streamlit 产品总览页面，展示文章、机会、推荐、处理进度、行动状态和可选能力状态。
-- 支持用户画像管理、文章库、机会库、推荐卡片、反馈、待办、日历和成长记忆。
-- 修复 Streamlit 首次启动交互导致的无法访问问题；启动脚本关闭遥测提示并绑定本机地址。
-- 无 Key 时使用确定性本地规则完成抽取和推荐说明，不因缺少原开发者账号而无法演示。
+- 本地核验返回 `rule_checked`，不再伪造真实 `verified`、证据链接或可信度加分；文章原链接不直接当作官网或报名地址。
+- 待办 action 与旧工具入口调用真实持久化服务；待办、状态、行为及日志同事务提交。
+- 机会总待办使用 `task_key=opportunity`，计划子待办使用 `plan-item:<ID>`。不同子任务独立保存，重复同步幂等，整批失败回滚。
+- 删除文章或用户按外键顺序清理完整关联图；运行时开启 SQLite 外键约束。
+- 最新迁移为 `0003_business_integrity`：保留旧待办与推荐 ID，修复待办唯一性，旧计划同步关系恢复为待同步；历史本地伪核验降级并撤销相应旧加权，升级后建议刷新推荐。
+- 已对个人 SQLite 的临时副本演练升级，记录数量保持一致、外键检查无违规。**未通过此次演练升级个人原库。**
+- `0003` 不支持自动 downgrade 合并待办。实际升级前停写并备份；回退须恢复升级前备份及对应旧代码，见 `docs/DATABASE.md`。
 
-### 3.3 导入、事务和并发可靠性
+### 3.3 抽取质量、严格校验与记忆
 
-- 支持浏览器上传 JSON、TXT、Markdown，含 UTF-8 BOM。
-- 单文件限制 2 MiB、最多 500 篇；非法格式、空正文和错误编码会被拒绝。
-- 批次先整体校验再写入，失败时整批回滚。
-- 文章正文由服务端规范化后计算 SHA-256；客户端传入哈希不作为可信身份。
-- `articles.content_hash` 已持久化并具有数据库唯一约束。
-- 上传、路径导入、采集接口共用相同去重语义。
-- 已测试 8 个并发上传/采集请求只创建一篇文章、只抽取一次。
-- 已覆盖保存点、事务回滚、SQLite WAL 备份和并发迁移。
+- 区分攻略、回顾、取消通知与真实邀请，完善主办方、自然语言日期、截止日期和活动日期的抽取。
+- 明确已经结束的活动降权且不建议报名；未知年份、不完整区间和实习开始时间保守处理。
+- 尚未实现过期机会的展示过滤，也不会自动重写历史已抽取的机会。
+- 模型响应校验字段、类型、范围及有限数值；截断或无效摘要明确失败。严格评测不会用规则回退冒充模型结果。
+- 推荐上下文接入最新成长记忆，保留明确反馈并优先遵守显式画像；尚未证明长期个性化收益。
+- 记忆提示词版本为 `growth_memory_v3_plan_context`，加入当前计划判断、风险和要求；提示词升级触发重新生成，无新变化时复用缓存。
 
-### 3.4 数据库迁移
+### 3.4 最新真实链路发现与修复
 
-- 接入 Alembic。
-- `0001_baseline` 是冻结的初始结构。
-- `0002_article_identity` 增加文章内容哈希及唯一约束。
-- 旧 SQLite 升级前会创建一致性备份。
-- 遇到旧库重复正文时迁移会停止并回滚，不擅自删除或合并用户数据。
-- 并发启动迁移已做串行化测试。
+- 首轮真实 API 测试发现计划项完成但关联待办仍为 pending。现在只有确认计划更新后，才原子同步关联待办的标题、描述、优先级和状态；失败整体回滚。
+- 同步前校验用户、机会与任务身份，不误改机会总待办或其他任务。
+- 推荐刷新同步 SQLAlchemy 会话状态，修复已加载推荐对象的身份映射冲突。
+- 记忆提示词明确“创建待办”不等于“已投递”或“核验成功”，避免丢失计划中的来源风险。
+- 新增回归覆盖待办同步、故障回滚、错误关联拒绝、记忆风险上下文与版本缓存、推荐刷新及真实测试显式联网门槛。
 
-### 3.5 可观测性
+## 4. 人工标注与真实数据评测
 
-- 每个 HTTP 请求带 `X-Request-ID`，可关联响应和后端日志。
-- 默认输出结构化 JSON 日志，不记录正文、请求参数、提示词或密钥。
-- 记录 HTTP 状态、耗时、慢路由、LLM 调用/重试/失败和本地回退原因。
-- 总览页提供“工程运行状态”展示。
-- `GET /observability/metrics` 返回当前单进程指标。
-- 指标明确是内存级、单进程级，重启会清零，不冒充生产监控平台。
+### 4.1 应使用的数据
 
-### 3.6 离线抽取回归
+用户已在工作台完成 AI 辅助草稿的首次人工确认。当前状态是 `labeled`，不是第二轮 `reviewed`，也不是独立盲标。
 
-- `evaluation/cases.json` 有 15 条手写虚构案例：10 条机会、5 条非机会。
-- 本地规则当前回归结果：
-  - Precision：0.7692
-  - Recall：1.0000
-  - F1：0.8696
-  - 字段精确匹配率：0.9750
-- 已知失败案例：自然语言日期漏抽，以及回顾、取消、经验指导文章误报。
-- CI 会运行 `python -m evaluation.run --check`，指标下降时失败。
-- 这些数字只用于代码回归，不能称为真实业务准确率或 DeepSeek 效果。
+| 数据 | 当前有效路径 | 数量与分布 |
+|---|---|---|
+| 抽取 | `evaluation/private/review-2026-09-26/extraction.jsonl` | 9 篇，4 正例、5 负例，共 4 个机会 |
+| 排序 | `evaluation/private/review-2026-09-26/ranking.jsonl` | 1 组画像、5 个候选，只有 1 个正相关候选 |
 
-### 3.7 人工标注与真实数据评测工具链
+排序日期固定为 `2026-09-09`，相关性等级为 0、0、0、2、0。原始 `evaluation/private/extraction.jsonl` 和 `ranking.jsonl` 仍是未标注队列，不能替代上表文件。
 
-- 新增版本化 JSONL 数据结构和原子写入。
-- 新增本地人工标注台：`evaluation/annotation_app.py`。
-- 私有标注文件只能写入 `evaluation/private/`，该目录不会进入 Git。
-- 模型现有输出只作为 `model_suggestions` / `model_order` 展示，不会自动成为人工真值。
-- 抽取评测支持：
-  - 文章级机会检测；
-  - 一篇多机会的一对一匹配；
-  - Precision / Recall / F1；
-  - 总体与分字段精确匹配；
-  - 失败案例 ID。
-- 推荐排序评测支持：
-  - 0～3 分级相关性；
-  - NDCG@K、MRR、Hit Rate@K、Precision@K；
-  - Pairwise Accuracy；
-  - 固定 `as_of` 日期，防止截止时间随运行日期漂移。
-- 每份数据和基线绑定数据指纹，数据改变后不会静默沿用旧门槛。
-- 仓库包含三组虚构排序回归案例，当前 NDCG@3、MRR、Hit Rate@3、Pairwise Accuracy 均为 1.0；这仍然只是合成回归成绩。
-- DeepSeek 评测必须同时满足：
-  1. 选择 `deepseek` 或 `compare` 模式；
-  2. 显式添加 `--allow-network`；
-  3. 配置用户自己的有效 Key。
-- 远程评测使用严格模式。DeepSeek 失败时不会把本地规则回退结果伪装成 DeepSeek 成绩。
+数据指纹：
 
-### 3.8 关键提交
+- 抽取：`3d019c49e3c1cfaf0fa695af5368077ba781465aa964790b23aa3f64050529f7`
+- 排序：`9a0840ce9d57940d5a7b038260ac8f5c9a7dd0ab4630cc99243eba70e318ee0f`
 
-```text
-beec111  Initial secure project import
-83165b8  feat: add product dashboard and quality foundation
-3483388  fix: make frontend startup non-interactive
-e16b23d  feat: add validated article uploads and offline evaluation baseline
-09b493c  feat: add safe migrations and concurrent article deduplication
-690fa83  feat: add request tracing and agent runtime metrics
-1e77444  feat: add human-labeled evaluation workflow
-```
+不得覆盖人工答案或自动升级为 `reviewed`。模型建议仅供参考；真实服务链测试没有修改这批标签。私有数据及报告被 Git 忽略，GitHub 克隆不包含这些文件。
 
-## 4. 当前没有完成 / 卡住的事项
+### 4.2 已获得的结果及解释
 
-### 4.1 真实人工标签尚未完成
+| 指标 | 规则修复前 | 规则修复后 |
+|---|---:|---:|
+| 抽取 F1 | 0.8889 | 1.0 |
+| 字段精确匹配 | 13/20 | 20/20 |
+| 排序 NDCG@3 | 1.0 | 1.0 |
+| 排序 Precision@3 | 0.3333 | 0.3333 |
 
-这不是程序故障，而是必须由人做判断的评测步骤。不能让模型用自己的输出给自己打分。
+修复前抽取 TP=4、FP=1、FN=0，误报为攻略，另有 7 项字段不匹配。该批数据已用于修正规则，因此属于开发集，不能据此声称独立泛化性能。链接标签全为空，也不能证明真实链接识别能力。排序只有一个正相关候选，Precision@3 上限就是 1/3；NDCG=1 不代表推荐准确率 100%。
 
-当前本机私有队列：
+证据位于复核目录的 `reports/`：
 
-- `evaluation/private/extraction.jsonl`
-  - 9 条记录
-  - 已标注 0
-  - 待标注 9
-  - 指纹：`071b511acc4206b0fb699edb0223b8c255b5d7bd2ff8fde23fd6906054e3c6b2`
-- `evaluation/private/ranking.jsonl`
-  - 1 组画像
-  - 5 个候选机会
-  - 已标注 0
-  - 待标注 1 组
-  - 指纹：`ab6766ff6d4a5e3cf7bf60ec4273469e555b7bbe57ef982e7cde65bad255e8d4`
+- `rules-20260926T061741Z/`：修复前冻结数据、manifest、报告、错误分析和 `RESULTS.md`。
+- `extraction-rules-after-quality.json`、`ranking-rules-after-quality.json`、`after-quality-manifest.json`、`AFTER_QUALITY.md`：修复后结果。
 
-因此当前不能声称项目已经取得真实准确率，也不能做可信的规则与 DeepSeek 对比。
+尚未进行该私有语料上的 DeepSeek 对比。后续需补充未参与调试的独立保留集，并增加二次复查或第二位标注者。
 
-### 4.2 尚未申请用户自己的外部服务 Key
+## 5. DeepSeek 接入与真实 Agent 验收
 
-- 当前不需要 Key 即可运行基础产品和离线评测。
-- 完成人工标签后，才值得申请自己的 DeepSeek API Key 做公平对比。
-- 联网核验另需自己的博查 Key；微信搜索另需兼容 MCP 服务。
-- 任何真实 Key 只能放在本地 `.env` 或操作系统环境变量中，不能写入代码、文档、截图或 CI。
+### 5.1 配置状态
 
-### 4.3 Collector 尚未正式整理
+用户自己的 Key 已配置在本地 `.env`，无需再次申请。`.env` 被 Git 忽略，`.env.example` 不含真实密钥。当前模型配置为 `deepseek-flash`、非思考模式、单次最大输出 4096 tokens；修改配置后须重启后端。
 
-- 当前桌面采集实验仍位于上级目录 `pyautogui/scripts/`。
-- 它把第三方 PyAutoGUI 源码、副本、定制脚本、硬编码坐标和可选视觉模型调用混在一起。
-- 现有采集脚本不属于基础启动必需部分，也没有进入主项目的 CI。
-- 曾尝试开始创建 `opportunity-radar-agent/collector/`，但生成的补丁不完整；相关文件已经全部删除，未暂存、未提交，随后 54 项测试全部通过。当前应从干净状态重新设计，不能假设已有半成品。
+真实连通检查已经通过。单次输出上限不是总费用预算，输入、多次调用和重试均可能计费。搜索核验另需博查或兼容 MCP 等真实搜索来源，只有 DeepSeek Key 不能获得网页证据。接入说明见 `docs/DEEPSEEK.md`。
 
-### 4.4 仍不适合直接公网部署
+### 5.2 已通过的测试
 
-- 当前没有登录、用户权限隔离、限流和公网导入目录限制。
-- SQLite 适合本地演示，不适合多实例并发部署。
-- `/observability/metrics` 未鉴权，只应在本机使用。
-- 现有后台线程适合单进程演示，不是可靠任务队列；进程退出后任务可能中断。
+`evaluation/check_agent_live.py` 在独立进程内先切换临时 SQLite，再加载生产服务；使用虚构画像和通知，调用真实 API，结束后删除临时数据库。默认最多 16 次 HTTP 请求，包含重试；报告写入被忽略的 `evaluation/private/agent-live/`。
 
-## 5. 下一步建议顺序
+修复后复测覆盖 9 个阶段：
 
-### 优先级 1：完成人工标注并生成第一份真实报告
+1. 远程抽取与机会保存。
+2. 远程负例识别。
+3. 画像匹配与推荐摘要。
+4. 机会顾问。
+5. 多轮推进分析。
+6. 模拟用户确认、保存计划、创建独立待办与重复同步。
+7. 日历实际落库与重复执行幂等。
+8. 反馈后重新规划、确认前不修改正式状态、确认后关联待办完成。
+9. 记忆生成、缓存复用、其他用户上下文隔离，以及实际记忆进入新推荐。
 
-1. 打开 <http://127.0.0.1:8502>。
-2. 标完 9 篇抽取案例。
-3. 把左侧数据集改为 `evaluation/private/ranking.jsonl`，标完 1 组排序案例。
-4. 对重要标签进行第二次复查，再标为 `reviewed`。
-5. 运行完整性检查和本地规则评测。
-6. 扩展到更多来源、负例、一文多机会和不同画像；9 篇文章远不足以支持泛化结论。
+复测结果：**9 阶段通过，12 次 HTTP 请求，32.007 秒，19,295 tokens，零请求失败、零规则回退。** 修复前后两轮合计 24 次请求、38,531 tokens，不含更早的一次连通检查；实际账单以平台为准。
 
-完成这一步后再申请 DeepSeek Key，运行相同数据指纹下的规则/DeepSeek 对比。报告必须同时写样本量、类别分布、日期、模型版本和局限。
+本机证据：
 
-### 优先级 2：重构独立 Collector 模块
+- `evaluation/private/agent-live/20260926T065445605546Z.json`：首轮，旧断言通过，但人工审阅发现上述待办同步缺陷。
+- `evaluation/private/agent-live/20260926T151257954384Z.json`：修复后复测，增加关联待办必须完成的断言。
+- `evaluation/private/agent-live/RESULTS.md`：结果、缺陷与边界摘要。
 
-建议分阶段完成，避免直接搬运旧 GUI 脚本：
+模型识别虚构通知后建议谨慎观察；建计划和执行工具是脚本模拟的显式用户选择，不能说成模型自行决定并执行。测试同步调用 worker，尚未覆盖浏览器、后台线程调度、进程退出恢复或通用自主工具循环。记忆上下文隔离测试也不等于已有 API 身份认证。
 
-1. 先在 `opportunity-radar-agent/collector/` 建立纯 Python 数据边界：文章对象、清洗、服务端提交、超时、有限重试、错误分类和 dry-run。
-2. 默认只允许向 `127.0.0.1` / `localhost` 发送正文；如允许远程后端，必须显式开启，防止私有公众号正文误传。
-3. 为传输层使用假的 HTTP transport 写单元测试，不依赖真实网络、微信客户端或屏幕权限。
-4. 再把剪贴板采集做成可选适配器，并把坐标、等待时间和输出目录移到配置中。
-5. 视觉定位/OCR 做成独立可选 provider；没有 `VISION_API_KEY` 时应给出明确提示或使用手动选择，不得硬编码旧开发者服务。
-6. 旧 `pyautogui/scripts/` 保留为实验参考，确认新模块可替代后再做删除或归档，避免一次大搬迁破坏可追溯性。
+### 5.3 授权与数据范围
 
-### 优先级 3：拆分长事务和任务执行
+本轮已获准进行真实 API 测试，实际仅外发虚构数据。用户的私人正文、已标注语料和真实画像均未用于这些调用。执行私有语料对比前，仍需明确确认该批数据外发 DeepSeek 及相应费用；不能将虚构链路验收授权扩大为私人语料外发授权。
 
-- 当前采集入库与机会抽取处于同一数据库事务。
-- 使用远程模型时，长调用会延长 SQLite 写锁。
-- 建议引入持久化任务表，至少记录 `queued/running/succeeded/failed`、尝试次数、错误类型和更新时间。
-- 先提交文章，再由 worker 抽取；重启后可恢复未完成任务。
-- 必须设计 claim/lease 或唯一约束，避免多 worker 重复抽取。
-- 不要只换成 daemon thread 后就宣称“可靠异步任务队列”。
+## 6. 后续实施顺序与验收标准
 
-### 优先级 4：部署与权限
+### P1：验收实际产品流程，建立可信模型对比
 
-1. 增加登录和用户数据隔离。
-2. 为敏感 API、指标接口和导入接口增加权限及限流。
-3. 将 SQLite 替换为 PostgreSQL，并验证迁移策略。
-4. 再增加 Docker/Compose 或云端部署方案、健康检查和持久卷。
-5. 最后补产品截图、演示视频和一份真实评测摘要，形成完整面试材料。
+- 先确认后端加载最新代码与配置；实际升级个人数据库前按迁移文档停写、备份，不把副本演练当作原库升级。
+- 用隔离测试画像走浏览器流程：导入、处理进度、推荐解释、计划确认、待办/日历、反馈和记忆更新。记录请求 ID，核对界面状态与数据库一致；补验错误提示和重复点击。
+- 在获得私有数据外发及费用授权后，用同一数据指纹运行规则 / DeepSeek 严格对比，报告模型、日期、耗时、用量和失败案例，不容许回退混入模型成绩。
+- 扩充独立保留集：一文多机会、真实链接、跨年日期、取消/过期、资格和地点限制；排序增加多个画像及多个不同相关等级的正例。
+- 验收标准：有可追溯的浏览器操作记录、同数据模型对比报告，以及开发集与保留集明确分开的评测记录。未完成前不宣传真实准确率或完整端到端验收通过。
 
-## 6. 常用命令
+### P2：可靠任务机制与短事务
 
-以下命令均在 `opportunity-radar-agent/` 目录执行。
+- 当前仍存在远程调用延长数据库写事务的问题，daemon thread 和进程内锁不能保证重启恢复。
+- 文章先落库，模型调用移出写事务；引入持久化任务状态 `queued/running/succeeded/failed`、尝试次数、错误类型和更新时间。
+- 使用原子领取、租约、有限重试和幂等约束，处理超时、进程中断、重复 worker 与重复提交。
+- 验收标准：中断后可恢复、并发领取不重复执行业务写入、模型慢响应不长期占用写锁，失败状态可在界面解释。
 
-### 启动
+### P3：增强 Agent 的受限工具决策
+
+- 在可靠执行基础上，让模型选择白名单工具，校验参数，读取真实工具结果后决定下一步。
+- 设置步骤、请求和用量预算；保留写操作确认、幂等与执行轨迹。
+- 验收标准：能够展示“决策 → 工具结果 → 后续决策”的有界循环，并覆盖无效参数、工具失败和预算耗尽；不以自由生成的成功文本替代工具实际结果。
+
+### P4：独立 Collector
+
+- 旧 `pyautogui/scripts/` 仍为实验代码，不属于可靠采集链路；不要假设已有可用的独立 Collector 半成品。
+- 先实现纯 Python 文章对象、清洗、提交协议、持久化补传、有限重试与 dry-run，用假 HTTP transport 验证。
+- 再接剪贴板、GUI / OCR 可选适配器，将坐标、等待时间和输出目录配置化；远程正文传输需显式配置。
+- 验收标准：断网后恢复补传、不重复入库、无 GUI 环境可测试；确认替代能力后再归档旧实验。
+
+### P5：产品整理与部署
+
+- 完善日期 / 时区、过期机会展示、分页和前端拆分；注意推荐降权与展示过滤是不同功能。
+- 按实际部署目标补登录、用户权限、限流和导入范围限制，再评估 PostgreSQL、Docker / Compose、持久卷与健康检查。
+- 当前没有公网使用所需的认证与访问隔离，指标接口也未鉴权；继续以本机单进程方式使用。
+- 最后整理截图、演示视频和评测摘要，面试材料区分已验证能力与后续计划。
+
+## 7. 常用命令
+
+以下在 `opportunity-radar-agent/` 执行。服务分别保持运行，端口状态需现场检查。
 
 ```bash
 sh run_backend.sh
@@ -268,122 +193,62 @@ sh run_frontend.sh
 sh run_annotation.sh
 ```
 
-对应地址：
+默认地址：主界面 <http://127.0.0.1:8501>，API 文档 <http://127.0.0.1:8000/docs>，健康检查 <http://127.0.0.1:8000/health>，标注台 <http://127.0.0.1:8502>。标注台手动选择上述复核目录文件，避免误打开原始队列。
 
-- 主界面：<http://127.0.0.1:8501>
-- API 文档：<http://127.0.0.1:8000/docs>
-- 健康检查：<http://127.0.0.1:8000/health>
-- 标注台：<http://127.0.0.1:8502>
-
-### 测试与回归
+离线回归显式清空 Key，避免本机已配置 `.env` 后意外触发计费：
 
 ```bash
-LOG_LEVEL=ERROR .venv/bin/python -m unittest discover -s tests -v
+DEEPSEEK_API_KEY= BOCHA_API_KEY= LOG_LEVEL=CRITICAL PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python -m evaluation.run --check
 .venv/bin/python -m evaluation.real_data evaluate ranking evaluation/ranking_cases.jsonl --mode rules --k 3 --baseline evaluation/ranking_baseline.json
-PYTHONPYCACHEPREFIX=/private/tmp/opportunity-radar-pycache .venv/bin/python -m compileall -q app evaluation frontend migrations tests
-.venv/bin/python -m pip check
 ```
 
-### 私有标注进度
+检查已确认标签与复跑规则评测：
 
 ```bash
-.venv/bin/python -m evaluation.real_data validate evaluation/private/extraction.jsonl
-.venv/bin/python -m evaluation.real_data validate evaluation/private/ranking.jsonl
+.venv/bin/python -m evaluation.real_data validate evaluation/private/review-2026-09-26/extraction.jsonl --require-complete
+.venv/bin/python -m evaluation.real_data validate evaluation/private/review-2026-09-26/ranking.jsonl --require-complete
+.venv/bin/python -m evaluation.real_data evaluate extraction evaluation/private/review-2026-09-26/extraction.jsonl --mode rules --output evaluation/private/review-2026-09-26/reports/extraction-rules-current.json
+.venv/bin/python -m evaluation.real_data evaluate ranking evaluation/private/review-2026-09-26/ranking.jsonl --mode rules --k 3 --output evaluation/private/review-2026-09-26/reports/ranking-rules-current.json
 ```
 
-标完后增加 `--require-complete`：
+按需复测真实 API（虚构数据、会产生调用；默认 CI 不运行）：
 
 ```bash
-.venv/bin/python -m evaluation.real_data validate evaluation/private/extraction.jsonl --require-complete
-.venv/bin/python -m evaluation.real_data validate evaluation/private/ranking.jsonl --require-complete
+.venv/bin/python -m evaluation.check_deepseek --allow-network
+.venv/bin/python -m evaluation.check_agent_live --allow-network
 ```
 
-### 本地规则真实数据评测
+私有语料联网对比命令见 `docs/DEEPSEEK.md` 第 3 节，取得对应授权后再执行。
 
-```bash
-.venv/bin/python -m evaluation.real_data evaluate extraction evaluation/private/extraction.jsonl --mode rules --output evaluation/private/reports/extraction-rules.json
-.venv/bin/python -m evaluation.real_data evaluate ranking evaluation/private/ranking.jsonl --mode rules --k 3 --output evaluation/private/reports/ranking-rules.json
-```
+## 8. 继续工作时的注意事项
 
-### 未来配置自己的 DeepSeek 后对比
+- 先看 `git status`、本文件和相关报告；无需重做已完成的 Key 配置或首轮人工确认。
+- `.env`、数据库、备份、私有正文、标注和报告不得提交。不要输出密钥或恢复旧开发者配置。
+- 默认测试保持离线。真实 API 测试必须显式联网、控制请求量；正常日志不要记录正文和提示词。
+- 当前正文哈希 v1 删除全部空白，可能合并仅靠空格区分语义的文本。改变规则需要新版本及迁移，不能直接改写历史迁移。
+- SQLite 迁移与恢复按文档执行；不要通过增加 worker 数量绕过尚未解决的长事务和恢复问题。
+- 连接失败时先检查监听；沙箱网络限制也可能导致 localhost 检查失败，不能直接认定服务已停止。
+- 测试会故意注入失败，判断以测试最终结果为准；编译缓存可指定到 `/private/tmp/`，避免 macOS 缓存目录权限问题。
+- 提交前检查 diff、空白和敏感信息；不使用破坏性 Git 命令清理用户修改。用户已授权完成验证后提交并推送 GitHub。
+- `gh` 已安装。Git push 若遇 HTTP/2 传输错误，可用 `git -c http.version=HTTP/1.1 push origin main` 重试，并检查远端提交；不能把本地测试成功当作 CI 成功。
 
-```bash
-.venv/bin/python -m evaluation.real_data compare extraction evaluation/private/extraction.jsonl --allow-network --output evaluation/private/reports/extraction-compare.json
-.venv/bin/python -m evaluation.real_data compare ranking evaluation/private/ranking.jsonl --allow-network --k 3 --output evaluation/private/reports/ranking-compare.json
-```
+## 9. 文档与近期里程碑
 
-不要在标注未完成时运行，也不要在未理解数据会发送给第三方及可能产生费用时添加 `--allow-network`。
+| 入口 | 内容 |
+|---|---|
+| 根目录 `README.md`、应用 `README.md` | 总览与启动 |
+| `docs/DEEPSEEK.md` | 模型配置、联网门槛、真实链路验收 |
+| `docs/EVALUATION.md` | 人工标注、数据指纹与真实评测 |
+| `docs/QUALITY.md` | 导入可靠性与抽取回归 |
+| `docs/DATABASE.md` | 迁移、备份与恢复 |
+| `docs/OBSERVABILITY.md` | 请求追踪与指标 |
+| `docs/INTERVIEW_GUIDE.md`、`docs/design.md` | 讲解与架构 |
 
-## 7. 已踩过的坑与操作注意事项
+近期功能提交：
 
-### 7.1 `127.0.0.1:8501` 无法访问通常是服务未启动
-
-- 浏览器显示 `ERR_CONNECTION_REFUSED` 代表对应端口没有可接受连接的进程，不是网页本身 404。
-- 先运行后端，再运行前端。
-- Streamlit 和 Uvicorn 必须分别保持运行；关闭终端会停止服务。
-- `uvicorn --reload` 会出现 reloader 和 worker 两个 PID，这是正常现象，不代表重复启动两个独立后端。
-
-### 7.2 沙箱内 `curl` 失败不一定代表本机服务没启动
-
-- 受限环境中直接访问 localhost 可能被拦截。
-- 先用 `lsof -nP -iTCP:8000 -iTCP:8501 -iTCP:8502 -sTCP:LISTEN` 查看监听。
-- 需要时再在获准的本机网络环境中执行健康检查。
-
-### 7.3 macOS Python 字节码缓存权限
-
-在受限环境运行 `compileall` 时，Python 可能试图写入 `~/Library/Caches` 并报 `PermissionError`。这不是语法错误。使用：
-
-```bash
-PYTHONPYCACHEPREFIX=/private/tmp/opportunity-radar-pycache .venv/bin/python -m compileall -q app evaluation frontend migrations tests
-```
-
-### 7.4 测试中的 ERROR 日志可能是预期行为
-
-部分测试故意注入存储失败、500 异常和 LLM 失败来验证回滚与脱敏。只要 unittest 最终是 `OK`，这些 ERROR 日志不表示测试失败。
-
-### 7.5 不要把模型建议当人工标签
-
-- `model_suggestions` 和 `model_order` 只用于辅助查看。
-- 数据指纹和指标会忽略这些建议。
-- 自动接受建议会造成循环论证，使评测失去意义。
-
-### 7.6 不要随意修改正文哈希规则
-
-- v1 规则会删除全部空白后计算 SHA-256。
-- 它可能合并某些仅靠空格区分语义的英文文本，是已知边界。
-- 更换规则必须新建迁移/版本，不能直接修改历史迁移或现有数据库语义。
-
-### 7.7 不要在数据库写事务中无限等待远程模型
-
-- 当前长事务问题已经记录但尚未重构。
-- DeepSeek 延迟或重试可能导致 SQLite 锁等待。
-- 在完成持久化任务队列前，不应提高并发或增加多 worker 后假设问题已解决。
-
-### 7.8 私有仓库 CI 查询
-
-- 本机没有安装 `gh` 时，`gh run list` 会失败。
-- 私有仓库对未认证 GitHub API 可能返回 404。
-- 如需脚本查询，应安全复用 Git credential helper，确保 token 只留在进程内，不打印、不写文件；更简单的方式是直接打开 GitHub Actions 页面查看。
-
-### 7.9 文件编辑与 Git
-
-- 本地数据库、备份、私有评测文件和 `.env` 属于用户数据，不要暂存或提交。
-- 提交前执行 `git diff --check`、敏感信息扫描和 `git status --short --ignored`。
-- 不要使用 `git reset --hard`、`git checkout --` 等破坏性命令清理用户修改。
-- 新功能先本地测试，再提交、推送并确认 Python 3.9/3.12 CI。
-
-## 8. 重要文档入口
-
-- 项目总览：`README.md`
-- 主应用说明：`opportunity-radar-agent/README.md`
-- 真实数据评测：`opportunity-radar-agent/docs/EVALUATION.md`
-- 导入可靠性与抽取评测：`opportunity-radar-agent/docs/QUALITY.md`
-- 可观测性：`opportunity-radar-agent/docs/OBSERVABILITY.md`
-- 数据库迁移与恢复：`opportunity-radar-agent/docs/DATABASE.md`
-- 面试讲解：`opportunity-radar-agent/docs/INTERVIEW_GUIDE.md`
-- 架构设计：`opportunity-radar-agent/docs/design.md`
-
-## 9. 给下一位执行者的简短结论
-
-项目当前是可运行、可测试、可离线演示的本地优先 Agent，安全清理、总览、导入可靠性、迁移、并发去重、可观测性和评测基础设施已经完成。最重要的事实是：真实标签仍为 0，不能宣传真实准确率。下一步先推动人工标注，同时从干净状态重做独立 Collector；不要恢复旧密钥，不要上传私有正文，也不要用模型输出给模型自己打分。
+- `1e77444`：人工标注与真实数据评测工具链。
+- `3f1fa71`：业务一致性、实际工具落库及迁移修复。
+- `01b1448`：机会抽取质量改进与 DeepSeek 接入准备。
+- `c02ba1d`：回归测试格式整理。
+- `ee3ad3a`：计划 / 待办同步、记忆风险上下文和真实模型服务链验收。
