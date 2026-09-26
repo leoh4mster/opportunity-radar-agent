@@ -18,7 +18,8 @@ UNKNOWN_DEADLINE_WORDS = {"", "未知", "未注明", "不详", "无", "none", "n
 
 
 class TodoService:
-    def create_from_opportunity(self, db: Session, user_id: int, opportunity_id: int) -> Todo:
+    def create_from_opportunity(self, db: Session, user_id: int, opportunity_id: int,
+                                *, task_key: str = "opportunity", commit: bool = True) -> Todo:
         try:
             user = db.get(UserProfile, user_id)
             if not user:
@@ -29,7 +30,7 @@ class TodoService:
 
             existing = (
                 db.query(Todo)
-                .filter(Todo.user_id == user_id, Todo.opportunity_id == opportunity_id)
+                .filter(Todo.user_id == user_id, Todo.opportunity_id == opportunity_id, Todo.task_key == task_key)
                 .first()
             )
             if existing:
@@ -41,6 +42,7 @@ class TodoService:
             todo = Todo(
                 user_id=user_id,
                 opportunity_id=opportunity_id,
+                task_key=task_key,
                 title=f"准备并申请：{opportunity.name}",
                 description=self._description(opportunity, deadline_note),
                 deadline=deadline,
@@ -53,8 +55,9 @@ class TodoService:
 
             OpportunityStateService().advance_state(db, user_id, opportunity_id, "todo_created")
             self._log_event(db, user_id, opportunity)
-            db.commit()
-            db.refresh(todo)
+            if commit:
+                db.commit()
+                db.refresh(todo)
             setattr(todo, "already_exists", False)
             logger.info("todo created user_id=%s opportunity_id=%s todo_id=%s", user_id, opportunity_id, todo.id)
             return todo

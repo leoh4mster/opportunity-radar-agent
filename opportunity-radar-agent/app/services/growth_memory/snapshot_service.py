@@ -162,6 +162,7 @@ class GrowthMemorySnapshotService:
                     "id": event.id,
                     "event_type": event.event_type,
                     "weight_hint": self._weight_hint(event.event_type),
+                    "feedback_text": str(meta.get("feedback_text") or "")[:1000],
                     "created_at": event.created_at.isoformat(),
                     "opportunity_id": opportunity_id,
                     "opportunity_title": opportunity.name if opportunity else str(meta.get("opportunity_name") or meta.get("title") or ""),

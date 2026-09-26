@@ -208,6 +208,7 @@ class OpportunityProgressService:
                 Todo.user_id == task.user_id,
                 Todo.opportunity_id == task.opportunity_id,
                 Todo.status.in_(["pending", "in_progress"]),
+                Todo.task_key == "opportunity",
             )
             .first()
         )
@@ -496,42 +497,37 @@ class OpportunityProgressService:
         if not selected_ids:
             raise ValueError("请选择要同步的计划任务")
         items = [item for item in self._plan_items(db, plan.id) if item.id in selected_ids]
-        created = []
-        existing = []
-        failed = []
         opportunity = db.get(Opportunity, plan.opportunity_id)
         if not opportunity:
             raise ValueError("机会不存在")
-
-        for item in items:
-            if item.synced_to_todo and item.todo_id:
-                existing.append({"item_id": item.id, "title": item.title, "todo_id": item.todo_id, "reason": "已经同步过"})
-                continue
-            existing_todo = self._find_similar_todo(db, plan.user_id, plan.opportunity_id, item.title)
-            if existing_todo:
-                item.synced_to_todo = True
-                item.todo_id = existing_todo.id
-                existing.append({"item_id": item.id, "title": item.title, "todo_id": existing_todo.id, "reason": "相同机会已有待办"})
-                continue
-            try:
-                todo = TodoService().create_from_opportunity(db, plan.user_id, plan.opportunity_id)
-                todo.title = item.title[:255]
-                todo.description = self._todo_description_from_plan_item(item, opportunity)
-                todo.deadline_note = "来自推进计划，请按机会原文自行确认时间"
-                todo.priority = item.priority if item.priority in {"high", "medium", "low"} else "medium"
-                db.flush()
+        if selected_ids != {item.id for item in items}:
+            raise ValueError("所选任务不属于当前计划")
+        if any(item.status in {"completed", "paused", "no_longer_applicable"} for item in items):
+            raise ValueError("只能同步当前待执行的任务")
+        created, existing = [], []
+        try:
+            for item in items:
+                task_key = f"plan-item:{item.id}"
+                todo = TodoService().create_from_opportunity(
+                    db, plan.user_id, plan.opportunity_id, task_key=task_key, commit=False)
+                already_exists = getattr(todo, "already_exists", False)
+                if not already_exists:
+                    todo.title = item.title[:255]
+                    todo.description = self._todo_description_from_plan_item(item, opportunity)
+                    todo.deadline_note = "来自推进计划，请按机会原文自行确认时间"
+                    todo.priority = item.priority if item.priority in {"high", "medium", "low"} else "medium"
                 item.synced_to_todo = True
                 item.todo_id = todo.id
-                created.append({"item_id": item.id, "title": item.title, "todo_id": todo.id})
-                self._log_event(db, plan.user_id, "sync_plan_item_to_todo", plan.opportunity_id, {"plan_id": plan.id, "item_id": item.id, "todo_id": todo.id})
-            except SQLAlchemyError as exc:
-                db.rollback()
-                failed.append({"item_id": item.id, "title": item.title, "error": "待办已存在或创建失败"})
-                logger_exception = getattr(exc, "__class__", type(exc)).__name__
-                self._log_event(db, plan.user_id, "sync_plan_item_to_todo", plan.opportunity_id, {"plan_id": plan.id, "item_id": item.id, "status": "failed", "error": logger_exception})
-                db.flush()
-        db.commit()
-        return {"created": created, "existing": existing, "failed": failed, "synced_todo_count": len(created)}
+                row = {"item_id": item.id, "title": item.title, "todo_id": todo.id}
+                (existing if already_exists else created).append(row)
+                if not already_exists:
+                    self._log_event(db, plan.user_id, "sync_plan_item_to_todo", plan.opportunity_id,
+                                    {"plan_id": plan.id, "item_id": item.id, "todo_id": todo.id})
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        return {"created": created, "existing": existing, "failed": [], "synced_todo_count": len(created)}
 
     def set_plan_status(self, db: Session, plan_id: int, status: str) -> OpportunityProgressPlan:
         if status not in {"completed", "paused", "cancelled"}:
@@ -1072,16 +1068,6 @@ class OpportunityProgressService:
             "system_status": plan.get("system_status", ""),
             "created_at": version.created_at.isoformat() if version.created_at else "",
         }
-
-    def _find_similar_todo(self, db: Session, user_id: int, opportunity_id: int, title: str) -> Todo | None:
-        todos = db.query(Todo).filter(Todo.user_id == user_id, Todo.opportunity_id == opportunity_id).all()
-        if not todos:
-            return None
-        title_norm = self._compact_text(title)
-        for todo in todos:
-            if self._compact_text(todo.title) == title_norm:
-                return todo
-        return todos[0]
 
     def _has_similar_plan_item(self, items: Any, title: str) -> bool:
         title_norm = self._compact_text(title)

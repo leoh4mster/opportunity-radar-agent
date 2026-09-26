@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 from pathlib import Path
 
@@ -25,14 +26,6 @@ def safe_dataset_path(value: str) -> Path:
     except ValueError as exc:
         raise DatasetError(f"标注工具只允许写入 {PRIVATE_ROOT}") from exc
     return resolved
-
-
-def suggestion_to_gold(item: dict) -> dict:
-    name = str(item.get("name") or "").strip()
-    fields = {field: str(item.get(field) or "") for field in
-              ("deadline", "location", "link", "organizer")}
-    return {"name": name, "category": item.get("category") or "其他",
-            "match_keywords": [name] if name else [], "fields": fields}
 
 
 st.set_page_config(page_title="机会雷达人工标注", layout="wide")
@@ -61,13 +54,14 @@ index = st.sidebar.number_input("记录序号", min_value=1, max_value=len(recor
                                 value=default_index + 1, step=1) - 1
 record = records[index]
 annotation = record["annotation"]
+widget_key = f"{dataset_path}:{record['id']}"
 st.write(f"第 {index + 1} / {len(records)} 条 · `{record['id']}` · 状态：`{annotation['status']}`")
 
 if record["kind"] == "extraction":
     st.subheader(record["title"])
     provenance = record.get("provenance") or {}
     st.caption(f"来源：{provenance.get('source') or '未注明'} · 发布时间：{provenance.get('published_at') or '未注明'}")
-    st.text_area("文章正文（只读）", value=record["content"], height=320, disabled=True)
+    st.text_area("文章正文（只读）", value=record["content"], height=320, disabled=True, key=f"body-{widget_key}")
     suggestions = record.get("model_suggestions") or []
     with st.expander(f"查看模型建议（{len(suggestions)} 条，不计入真值）"):
         st.json(suggestions)
@@ -75,17 +69,19 @@ if record["kind"] == "extraction":
     current_has = annotation.get("has_opportunity")
     choice_index = 0 if current_has is None else (1 if current_has else 2)
     choice = st.radio("这篇文章是否发布了可报名、申请或参与的具体机会？",
-                      ["尚未判断", "有机会", "没有机会"], index=choice_index, horizontal=True)
-    initial_gold = annotation.get("opportunities") or [suggestion_to_gold(item) for item in suggestions]
+                      ["尚未判断", "有机会", "没有机会"], index=choice_index, horizontal=True, key=f"choice-{widget_key}")
+    initial_gold = annotation.get("opportunities") or []
+    st.caption('请独立填写机会列表；每项包含 name、category、match_keywords 和 fields。模型建议不会预填。')
     gold_text = st.text_area(
         "人工机会列表（JSON）",
         value=json.dumps(initial_gold, ensure_ascii=False, indent=2),
         height=280,
+        key=f"gold-{widget_key}",
         disabled=choice == "没有机会",
         help="每项填写 name、category、match_keywords，以及需要严格评测的 fields。空值也可作为明确真值。",
     )
-    notes = st.text_area("标注备注", value=str(annotation.get("notes") or ""))
-    reviewed = st.checkbox("已由第二次检查确认，可标记为 reviewed", value=annotation["status"] == "reviewed")
+    notes = st.text_area("标注备注", value=str(annotation.get("notes") or ""), key=f"notes-{widget_key}")
+    reviewed = st.checkbox("已由第二次检查确认，可标记为 reviewed", value=annotation["status"] == "reviewed", key=f"reviewed-{widget_key}")
     if st.button("保存本条人工标注", type="primary"):
         try:
             if choice == "尚未判断":
@@ -93,14 +89,15 @@ if record["kind"] == "extraction":
             opportunities = [] if choice == "没有机会" else json.loads(gold_text)
             if not isinstance(opportunities, list):
                 raise DatasetError("人工机会列表必须是 JSON 数组")
-            record["annotation"] = {
+            updated_records = copy.deepcopy(records)
+            updated_records[index]["annotation"] = {
                 "status": "reviewed" if reviewed else "labeled",
                 "has_opportunity": choice == "有机会",
                 "opportunities": opportunities,
                 "notes": notes.strip(),
             }
-            require_valid(records)
-            write_jsonl(dataset_path, records)
+            require_valid(updated_records)
+            write_jsonl(dataset_path, updated_records)
             st.success("已原子保存。模型建议没有被自动当作标签。")
             st.rerun()
         except (DatasetError, json.JSONDecodeError) as exc:
@@ -120,18 +117,23 @@ else:
             st.markdown(f"**{candidate['name']}** · {candidate['category']} · {candidate.get('location') or '地点未注明'}")
             st.caption(candidate.get("summary") or candidate.get("requirements") or "无摘要")
             current = relevance.get(candidate_id)
-            grades[candidate_id] = st.select_slider(
-                "相关性", options=[0, 1, 2, 3], value=current if current is not None else 0,
-                key=f"grade-{record['id']}-{candidate_id}",
+            choices = [None, 0, 1, 2, 3]
+            grades[candidate_id] = st.selectbox(
+                "相关性", options=choices, index=choices.index(current),
+                format_func=lambda value: "尚未判断" if value is None else str(value),
+                key=f"grade-{widget_key}-{candidate_id}",
             )
-    notes = st.text_area("标注备注", value=str(annotation.get("notes") or ""))
-    reviewed = st.checkbox("已由第二次检查确认，可标记为 reviewed", value=annotation["status"] == "reviewed")
+            with st.expander("候选详情（日期、资格、地点等）"):
+                st.json(candidate)
+    notes = st.text_area("标注备注", value=str(annotation.get("notes") or ""), key=f"notes-{widget_key}")
+    reviewed = st.checkbox("已由第二次检查确认，可标记为 reviewed", value=annotation["status"] == "reviewed", key=f"reviewed-{widget_key}")
     if st.button("保存本组排序标注", type="primary"):
-        record["annotation"] = {"status": "reviewed" if reviewed else "labeled",
-                                "relevance": grades, "notes": notes.strip()}
+        updated_records = copy.deepcopy(records)
+        updated_records[index]["annotation"] = {"status": "reviewed" if reviewed else "labeled",
+                                                "relevance": grades, "notes": notes.strip()}
         try:
-            require_valid(records)
-            write_jsonl(dataset_path, records)
+            require_valid(updated_records)
+            write_jsonl(dataset_path, updated_records)
             st.success("已原子保存。")
             st.rerun()
         except DatasetError as exc:

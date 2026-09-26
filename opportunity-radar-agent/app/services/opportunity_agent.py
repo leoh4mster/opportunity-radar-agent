@@ -5,16 +5,16 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.entities import Opportunity, ToolCallLog, UserProfile
+from app.models.entities import Opportunity, ToolCallLog, UserProfile, UserEvent
 from app.services.agent_tools.base import OpportunityToolContext, ToolRegistry
 from app.services.agent_tools.calendar_tool import CalendarTool
 from app.services.agent_tools.enrichment_tool import EnrichOpportunityInput, EnrichOpportunityTool
 from app.services.agent_tools.todo_tool import TodoTool
 from app.services.agent_tools.verification_tool import VerifyOpportunityInput, VerifyOpportunityTool
 from app.services.calendar_event_service import CalendarEventService
-from app.services.growth_memory.memory_manager import GrowthMemoryManager
 from app.services.json_utils import dumps, loads_list
 from app.services.opportunity_state_service import OpportunityStateService
+from app.services.todo_service import TodoService
 
 
 def build_default_registry() -> ToolRegistry:
@@ -30,13 +30,23 @@ class OpportunityAgent:
     def __init__(self, registry: ToolRegistry | None = None) -> None:
         self.registry = registry or build_default_registry()
 
-    def run_opportunity_action(
+    def run_opportunity_action(self, db: Session, user_id: int, opportunity_id: int,
+                               action: str, extra_params: dict[str, Any] | None = None,
+                               *, commit: bool = True) -> dict[str, Any]:
+        try:
+            return self._run_opportunity_action(db, user_id, opportunity_id, action, extra_params, commit=commit)
+        except Exception:
+            db.rollback()
+            raise
+
+    def _run_opportunity_action(
         self,
         db: Session,
         user_id: int,
         opportunity_id: int,
         action: str,
         extra_params: dict[str, Any] | None = None,
+        *, commit: bool = True,
     ) -> dict[str, Any]:
         opportunity = db.get(Opportunity, opportunity_id)
         if not opportunity:
@@ -52,6 +62,10 @@ class OpportunityAgent:
         output_payload = output.model_dump(mode="json")
 
         self._apply_tool_result(opportunity, action, output_payload)
+        if action == "todo":
+            todo = TodoService().create_from_opportunity(db, user_id, opportunity_id, commit=False)
+            output_payload.update(todo_id=todo.id, already_exists=getattr(todo, "already_exists", False),
+                                  summary="待办已存在。" if getattr(todo, "already_exists", False) else "待办已保存。")
         calendar_event_created = True
         if action == "calendar":
             calendar_event = CalendarEventService().upsert_from_opportunity(
@@ -81,10 +95,12 @@ class OpportunityAgent:
                         "reminder_time": "",
                         "date_status": extraction.date_status,
                         "date_reason": extraction.reason,
-                        "summary": "已生成待办；原文缺少明确日期，暂未加入日历提醒。",
+                        "summary": "原文缺少明确日期，暂未加入日历提醒。",
                     }
                 )
-        if action == "calendar" and not calendar_event_created:
+        if (action == "calendar" and not calendar_event_created) or (
+            action == "verify" and output_payload.get("verification_status") != "verified"
+        ):
             state = OpportunityStateService().get_state(db, user_id, opportunity_id)
         else:
             state = OpportunityStateService().advance_for_action(db, user_id, opportunity_id, action)
@@ -98,23 +114,19 @@ class OpportunityAgent:
             status=output_payload.get("status", "success"),
         )
         db.add(log)
-        db.commit()
-        db.refresh(log)
-        db.refresh(opportunity)
-
         event_type = {
             "verify": "verify_opportunity",
             "calendar": "create_calendar" if calendar_event_created else "",
-            "todo": "create_todo",
         }.get(action)
         if event_type:
-            GrowthMemoryManager().log_event(
-                db,
-                user_id=user_id,
-                event_type=event_type,
-                event_target=str(opportunity_id),
-                event_metadata=self._event_metadata(opportunity, output_payload),
-            )
+            db.add(UserEvent(user_id=user_id, event_type=event_type, event_target=str(opportunity_id),
+                             event_metadata=dumps(self._event_metadata(opportunity, output_payload))))
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(log)
+        db.refresh(opportunity)
 
         return {
             "action": action,
@@ -185,7 +197,7 @@ class OpportunityAgent:
             opportunity.risk_flags = dumps(output.get("risk_flags", []))
             opportunity.verification_summary = output.get("verification_summary", "")
             opportunity.evidence_sources = dumps(output.get("evidence_sources", []))
-            opportunity.verified_at = now
+            opportunity.verified_at = now if output.get("verification_status") == "verified" else None
         elif action == "enrich":
             opportunity.official_url = self._known(output.get("official_url"), opportunity.official_url)
             opportunity.registration_url = self._known(output.get("registration_url"), opportunity.registration_url)

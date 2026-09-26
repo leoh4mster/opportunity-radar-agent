@@ -19,37 +19,8 @@ class SearchProvider:
 
 class LocalSearchProvider(SearchProvider):
     def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        official_words = ["大学", "学院", "实验室", "官方", "招生办", "就业中心", "学会"]
-        risk_words = ["限时付费", "保录取", "内部名额", "包过", "高价", "稳赚"]
-        results: list[SearchResult] = []
-        if any(word in query for word in official_words):
-            results.append(
-                SearchResult(
-                    title=f"{query[:40]} 官方通知",
-                    url="https://example.edu.cn/official-notice",
-                    snippet="本地规则结果：标题、主办方和来源具有高校/学院/实验室等官方特征。",
-                    source_type="official_like",
-                )
-            )
-        if any(word in query for word in risk_words):
-            results.append(
-                SearchResult(
-                    title="风险提示：疑似营销或承诺型表述",
-                    url="unknown",
-                    snippet="本地规则结果：出现保录取、内部名额、限时付费等高风险表达，需要人工复核。",
-                    source_type="risk_flag",
-                )
-            )
-        if not results:
-            results.append(
-                SearchResult(
-                    title=f"{query[:40]} 相关结果",
-                    url="unknown",
-                    snippet="本地规则结果：未找到明确官方来源，建议补充主办方或官方链接后再判断。",
-                    source_type="uncertain",
-                )
-            )
-        return results[:max_results]
+        # Rules cannot produce retrieved evidence or authoritative URLs.
+        return []
 
 
 class TavilySearchProvider(SearchProvider):

@@ -235,7 +235,7 @@ total =
 4. `OpportunityAgent` 读取 opportunity 和 user_profile，选择 `VerifyOpportunityTool`。
 5. `VerifyOpportunityTool` 通过本地规则检查信息完整性和风险词；它不能替代官网核验。
 6. 系统写入 `tool_call_logs`，并更新 opportunity 的核验字段。
-7. 推荐卡片展示“已核验：可信度 86 / 风险 low”。
+7. 推荐卡片展示“仅本地规则检查 · 未联网核验”；本地检查不生成真实证据、可信度分数或 `verified` 状态。
 
 ## Growth Memory
 
@@ -248,7 +248,7 @@ total =
 - 不引入向量数据库。
 - 不构建聊天机器人式 Memory。
 
-成长记忆快照会提供给机会助理和 AI 推进模块使用。旧的 `memory_reflections` 表仅为兼容历史数据保留。
+成长记忆快照会提供给机会助理、AI 推进和增强推荐模块使用。推荐按用户读取最新快照并传入模型评分上下文，带快照 ID 和提示词版本；显式画像目标优先。无 Key 时排序继续使用确定性规则和反馈加权，不把记忆文本任意转成分数。旧的 `memory_reflections` 表与检索器仅为兼容历史数据保留，不再由推荐路径读取。
 
 ## API
 
@@ -263,8 +263,6 @@ total =
 - `GET /opportunities`
 - `POST /recommendations/generate/{user_id}`
 - `GET /recommendations/{user_id}`
-- `POST /summaries/generate/{user_id}`
-- `GET /summaries/{user_id}`
 - `POST /tools/{tool_name}`
 - `POST /opportunities/{opportunity_id}/actions`
 - `POST /opportunities/{opportunity_id}/actions/verify`
@@ -273,5 +271,5 @@ total =
 - `POST /opportunities/{opportunity_id}/actions/todo`
 - `POST /memory/events`
 - `GET /memory/events/{user_id}`
-- `POST /memory/reflections/generate`
-- `GET /memory/reflections/{user_id}`
+- `POST /memory/{user_id}/generate`
+- `GET /memory/{user_id}/latest`

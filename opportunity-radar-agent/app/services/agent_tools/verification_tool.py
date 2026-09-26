@@ -13,8 +13,8 @@ class VerifyOpportunityInput(OpportunityToolContext):
 
 
 class VerifyOpportunityOutput(ToolOutput):
-    verification_status: Literal["verified", "uncertain", "suspicious", "failed"]
-    credibility_score: int = Field(ge=0, le=100)
+    verification_status: Literal["rule_checked", "verified", "uncertain", "suspicious", "failed"]
+    credibility_score: int | None = Field(default=None, ge=0, le=100)
     risk_level: Literal["low", "medium", "high"]
     risk_flags: list[str] = Field(default_factory=list)
     verification_summary: str
@@ -60,9 +60,9 @@ class VerifyOpportunityTool(BaseTool):
         score = max(0, min(100, score))
 
         if score >= 78 and not risk_flags:
-            status = "verified"
+            status = "rule_checked"
             risk_level = "low"
-            summary = "本地规则核验显示该机会具备较完整的主办方和来源特征，暂未发现明显风险词。"
+            summary = "仅完成本地规则检查，暂未发现明显风险词；尚未联网核验主办方、报名入口或机会真实性。"
         elif score < 45 or any("高风险" in flag or "承诺" in flag for flag in risk_flags):
             status = "suspicious"
             risk_level = "high"
@@ -76,11 +76,11 @@ class VerifyOpportunityTool(BaseTool):
             status="success",
             summary=summary,
             verification_status=status,
-            credibility_score=score,
+            credibility_score=None,
             risk_level=risk_level,
             risk_flags=risk_flags,
             verification_summary=summary,
-            evidence_sources=evidence,
+            evidence_sources=[],
         )
 
     def _risk_flags(self, text: str) -> list[str]:

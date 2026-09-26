@@ -11,7 +11,8 @@ import logging
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.entities import Article, Opportunity, OpportunityState, Recommendation, Todo, ToolCall, ToolCallLog
+from app.models.entities import Article, Opportunity
+from app.services.deletion_service import delete_related_data
 
 
 logger = logging.getLogger(__name__)
@@ -35,28 +36,10 @@ class ArticleService:
                 item[0] for item in db.query(Opportunity.id).filter(Opportunity.article_id == article_id).all()
             ]
 
-            deleted_recommendations = 0
-            if opportunity_ids:
-                deleted_recommendations = (
-                    db.query(Recommendation)
-                    .filter(Recommendation.opportunity_id.in_(opportunity_ids))
-                    .delete(synchronize_session=False)
-                )
-                db.query(OpportunityState).filter(OpportunityState.opportunity_id.in_(opportunity_ids)).delete(
-                    synchronize_session=False
-                )
-                db.query(Todo).filter(Todo.opportunity_id.in_(opportunity_ids)).delete(synchronize_session=False)
-                db.query(ToolCallLog).filter(ToolCallLog.opportunity_id.in_(opportunity_ids)).delete(
-                    synchronize_session=False
-                )
-                db.query(ToolCall).filter(ToolCall.opportunity_id.in_(opportunity_ids)).delete(
-                    synchronize_session=False
-                )
-
-            deleted_opportunities = (
-                db.query(Opportunity).filter(Opportunity.article_id == article_id).delete(synchronize_session=False)
-            )
-            db.delete(article)
+            deleted_recommendations = delete_related_data(db, opportunity_ids=opportunity_ids)
+            deleted_opportunities = db.query(Opportunity).filter(
+                Opportunity.article_id == article_id).delete(synchronize_session=False)
+            db.query(Article).filter(Article.id == article_id).delete(synchronize_session=False)
             db.commit()
 
             logger.info(

@@ -32,6 +32,21 @@ class GrowthMemoryManager:
     def generate_snapshot(self, db: Session, user_id: int) -> dict[str, Any]:
         return self.snapshots.generate(db, user_id)
 
+    def recommendation_context(self, db: Session, user_id: int) -> dict[str, Any]:
+        """Copy the newest snapshot before ranking releases its read transaction."""
+        snapshot = self.latest_snapshot(db, user_id)
+        if snapshot is None:
+            return {}
+        return {
+            "snapshot_id": snapshot.id,
+            "prompt_version": snapshot.prompt_version,
+            "behavior_count": snapshot.behavior_count,
+            "current_stage": snapshot.current_stage,
+            "recent_focus": snapshot.recent_focus,
+            "preference_changes": snapshot.preference_changes,
+            "next_stage_advice": snapshot.next_stage_advice,
+        }
+
     def retrieve_relevant_memory(
         self,
         db: Session,

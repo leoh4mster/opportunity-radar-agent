@@ -33,8 +33,8 @@ class EnrichOpportunityTool(BaseTool):
 
     def run(self, tool_input: EnrichOpportunityInput) -> EnrichOpportunityOutput:
         self.search_provider.search(f"{tool_input.title} {tool_input.organizer}", max_results=3)
-        official_url = tool_input.link or "unknown"
-        registration_url = tool_input.link or "unknown"
+        official_url = "unknown"
+        registration_url = "unknown"
         deadline = tool_input.deadline or "unknown"
         location = tool_input.location or "unknown"
         requirements = tool_input.requirements or "unknown"

@@ -7,7 +7,10 @@ import logging
 import re
 from typing import Any
 
-from app.services.llm_gateway import LLMGateway
+from pydantic import ValidationError
+
+from app.schemas.llm_outputs import ExtractedOpportunity, RecommendationAnalysis
+from app.services.llm_gateway import LLMGateway, LLMAuthError
 from app.core.observability import runtime_metrics
 
 
@@ -22,6 +25,8 @@ class LLMService:
 
     def extract_opportunities(self, article_title: str, article_content: str) -> list[dict[str, Any]]:
         if not self.gateway.is_configured():
+            if not self.allow_local_fallback:
+                raise LLMAuthError("Remote model is required but not configured")
             runtime_metrics.llm_fallback("extract_opportunities", "not_configured")
             return self._rule_extract(article_title, article_content)
         system = "你是信息抽取助手。只输出 JSON 数组，不要 Markdown，不要额外解释。"
@@ -46,7 +51,8 @@ benefit/cost/credibility 是 0 到 1 的数字。
                 ],
                 temperature=0.2,
             )
-            return self._parse_json_array(text)
+            return [ExtractedOpportunity.model_validate(item).model_dump()
+                    for item in self._parse_json_array(text)]
         except Exception as exc:
             if not self.allow_local_fallback:
                 raise
@@ -58,6 +64,8 @@ benefit/cost/credibility 是 0 到 1 的数字。
         if not recommendations:
             return "本期没有发现可推荐的机会。可以继续导入文章，或调整用户画像。"
         if not self.gateway.is_configured():
+            if not self.allow_local_fallback:
+                raise LLMAuthError("Remote model is required but not configured")
             runtime_metrics.llm_fallback("summarize_recommendations", "not_configured")
             return self._rule_summary(profile, recommendations)
         system = "你是个性化机会雷达 Agent。请输出简洁中文摘要。"
@@ -87,6 +95,8 @@ benefit/cost/credibility 是 0 到 1 的数字。
         base_scores: dict[str, float],
     ) -> dict[str, Any]:
         if not self.gateway.is_configured():
+            if not self.allow_local_fallback:
+                raise LLMAuthError("Remote model is required but not configured")
             runtime_metrics.llm_fallback("analyze_recommendation", "not_configured")
             return self._rule_recommendation_analysis(profile, opportunity, base_scores)
         system = "你是机会推荐排序助手。只输出 JSON 对象，不要 Markdown，不要额外解释。"
@@ -100,6 +110,7 @@ benefit/cost/credibility 是 0 到 1 的数字。
   "relevance_explanation": ""
 }}
 relevance_score 和 benefit_score 取值 0 到 100。
+若画像中包含 growth_memory，只把它作为近期行为背景；显式画像目标优先，不要把阶段性观察当成永久偏好。
 content_overview 请用 150 到 500 个中文字符，基于 article_content_excerpt 和机会字段改写出自然完整摘要。
 要求：不要只写标题，不要重复标题，不要直接复制 opportunity.summary，不要在半句话中断。
 
@@ -107,7 +118,6 @@ content_overview 请用 150 到 500 个中文字符，基于 article_content_exc
 机会：{json.dumps(opportunity, ensure_ascii=False)}
 基础分数：{json.dumps(base_scores, ensure_ascii=False)}
 """
-        parsed: dict[str, Any] | None = None
         last_error: Exception | None = None
         for attempt in range(2):
             prompt = user
@@ -121,23 +131,15 @@ content_overview 请用 150 到 500 个中文字符，基于 article_content_exc
                     ],
                     temperature=0.2,
                 )
-                parsed = self._parse_json_object(text)
-                content_overview = str(parsed.get("content_overview", "")).strip()
+                parsed = RecommendationAnalysis.model_validate(self._parse_json_object(text))
+                content_overview = parsed.content_overview
                 source_summary = str(opportunity.get("summary") or "").strip()
                 title = str(opportunity.get("name") or "").strip()
                 self._validate_content_overview(content_overview, source_summary, title)
-                break
-            except RuntimeError as exc:
+                return parsed.model_dump()
+            except (RuntimeError, ValidationError) as exc:
                 last_error = exc
-        if parsed is None:
-            raise RuntimeError("LLM validation failed: {}".format(last_error))
-        content_overview = str(parsed.get("content_overview", "")).strip()
-        return {
-            "relevance_score": float(parsed.get("relevance_score", base_scores.get("relevance_score", 50))),
-            "benefit_score": float(parsed.get("benefit_score", base_scores.get("benefit_score", 50))),
-            "content_overview": content_overview,
-            "relevance_explanation": str(parsed.get("relevance_explanation", "")),
-        }
+        raise RuntimeError("LLM recommendation validation failed") from last_error
 
     def _validate_content_overview(self, overview: str, source_summary: str, title: str) -> None:
         if len(overview) < 80:
@@ -164,7 +166,9 @@ content_overview 请用 150 到 500 个中文字符，基于 article_content_exc
                 raise RuntimeError("LLM output is not valid JSON array") from exc
         if not isinstance(parsed, list):
             raise RuntimeError("LLM output is not a JSON array")
-        return [item for item in parsed if isinstance(item, dict)]
+        if any(not isinstance(item, dict) for item in parsed):
+            raise RuntimeError("LLM opportunity array contains invalid items")
+        return parsed
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
         cleaned = text.strip()

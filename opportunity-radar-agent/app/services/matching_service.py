@@ -66,14 +66,14 @@ class MatchingService:
                 logger.info("recommendations empty: no opportunities user_id=%s", user_id)
                 return existing_query.all()
 
-            memory = GrowthMemoryManager()
+            memory_context = GrowthMemoryManager().recommendation_context(db, user_id)
             feedback = FeedbackService()
             state_service = OpportunityStateService()
             recommendations = []
             for opportunity in opportunities:
                 try:
                     state = state_service.get_state(db, user_id, opportunity.id)
-                    relevant_memory = [item.summary for item in memory.retrieve_relevant_memory(db, user_id, opportunity)]
+                    relevant_memory = [memory_context["recent_focus"]] if memory_context.get("recent_focus") else []
                     negative_feedback_count = self._recent_negative_feedback_count(db, user_id, opportunity)
                     feedback_bias = feedback.get_user_feedback_bias(db, user_id, opportunity)
                     db.rollback()
@@ -85,6 +85,7 @@ class MatchingService:
                             relevant_memory,
                             negative_feedback_count,
                             feedback_bias,
+                            memory_context=memory_context,
                         )
                     )
                 except Exception as exc:
@@ -134,6 +135,7 @@ class MatchingService:
         relevant_memory: list[str] | None = None,
         negative_feedback_count: int = 0,
         feedback_bias: float = 0.0,
+        memory_context: dict | None = None,
     ) -> Recommendation:
         relevant_memory = relevant_memory or []
         goals = loads_list(user.current_goals)
@@ -177,7 +179,7 @@ class MatchingService:
         }
         try:
             analysis = self.llm.analyze_recommendation(
-                profile=self._profile_payload(user),
+                profile={**self._profile_payload(user), "growth_memory": memory_context or {}},
                 opportunity=self._opportunity_payload(opportunity),
                 base_scores=base_scores,
             )

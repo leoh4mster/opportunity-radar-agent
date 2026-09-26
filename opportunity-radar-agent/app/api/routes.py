@@ -62,6 +62,7 @@ from app.schemas.dto import (
 )
 from app.services.article_ingest_service import ArticleIngestService
 from app.services.article_service import ArticleService
+from app.services.deletion_service import delete_related_data
 from app.services.calendar_event_service import CalendarEventService
 from app.services.dashboard_service import DashboardService
 from app.services.extraction_service import ExtractionService
@@ -211,26 +212,14 @@ def delete_profile(user_id: int, db: Session = Depends(get_db)) -> dict[str, int
         profile = db.get(UserProfile, user_id)
         if not profile:
             raise HTTPException(status_code=404, detail="用户画像不存在")
-        for model in [
-            Recommendation,
-            OpportunityState,
-            ToolCallLog,
-            ToolCall,
-            Todo,
-            CalendarEvent,
-            EnrichmentResult,
-            SimilarOpportunityResult,
-            UserEvent,
-            MemoryReflection,
-            GrowthMemorySnapshot,
-        ]:
-            db.query(model).filter(model.user_id == user_id).delete(synchronize_session=False)
-        db.delete(profile)
+        delete_related_data(db, user_id=user_id)
+        db.query(UserProfile).filter(UserProfile.id == user_id).delete(synchronize_session=False)
         db.commit()
         return {"status": "deleted", "user_id": user_id}
     except HTTPException:
         raise
     except Exception as exc:
+        db.rollback()
         logger.exception("delete profile failed user_id=%s", user_id)
         raise HTTPException(status_code=500, detail="用户画像删除失败") from exc
 

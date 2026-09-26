@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.entities import Article, Opportunity
 from app.services.json_utils import dumps
 from app.services.llm_service import CATEGORIES, LLMService
+from app.schemas.llm_outputs import ExtractedOpportunity
 
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,8 @@ class ExtractionService:
         return created
 
     def _to_opportunity(self, article_id: int, item: dict) -> Opportunity:
-        category = item.get("category") or "其他"
+        item = ExtractedOpportunity.model_validate(item).model_dump()
+        category = item["category"]
         if category not in CATEGORIES:
             category = "其他"
         return Opportunity(
@@ -69,8 +71,8 @@ class ExtractionService:
             link=str(item.get("link") or ""),
             requirements=str(item.get("requirements") or ""),
             summary=str(item.get("summary") or ""),
-            benefit=float(item.get("benefit") or 0.6),
-            cost=float(item.get("cost") or 0.4),
-            credibility=float(item.get("credibility") or 0.7),
+            benefit=item["benefit"],
+            cost=item["cost"],
+            credibility=item["credibility"],
             raw_payload=dumps(item),
         )

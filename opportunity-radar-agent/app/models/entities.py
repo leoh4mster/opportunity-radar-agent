@@ -130,11 +130,12 @@ class OpportunityState(Base):
 
 class Todo(Base):
     __tablename__ = "todos"
-    __table_args__ = (UniqueConstraint("user_id", "opportunity_id", name="uq_todo_user_opportunity"),)
+    __table_args__ = (UniqueConstraint("user_id", "opportunity_id", "task_key", name="uq_todo_identity"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user_profiles.id"), index=True)
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id"), index=True)
+    task_key: Mapped[str] = mapped_column(String(120), default="opportunity", server_default="opportunity")
     title: Mapped[str] = mapped_column(String(255), index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     deadline: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)

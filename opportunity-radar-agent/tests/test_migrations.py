@@ -74,7 +74,7 @@ class MigrationTest(unittest.TestCase):
         upgrade_database(self.engine)
         with self.engine.connect() as connection:
             context = MigrationContext.configure(connection)
-            self.assertEqual(context.get_current_revision(), "0002_article_identity")
+            self.assertEqual(context.get_current_revision(), "0003_business_integrity")
             self.assertEqual(compare_metadata(context, Base.metadata), [])
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
         self.assertFalse((self.path.parent / ".backups").exists())
@@ -142,14 +142,14 @@ class MigrationTest(unittest.TestCase):
     def test_hash_revision_downgrade_and_reupgrade_preserve_data(self):
         self.legacy()
         before = self.snapshot()
-        upgrade_database(self.engine)
+        upgrade_database(self.engine, "0002_article_identity")
         with self.engine.connect() as connection:
             config = migration_config()
             config.attributes["connection"] = connection
             command.downgrade(config, "0001_baseline")
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(len(list((self.path.parent / ".backups").glob("*.db"))), 2)
-        upgrade_database(self.engine)
+        upgrade_database(self.engine, "0002_article_identity")
         with self.engine.connect() as connection:
             self.assertEqual(connection.exec_driver_sql("SELECT content_hash FROM articles").scalar(),
                              compute_content_hash("AI 实习\n招募"))
@@ -163,6 +163,46 @@ class MigrationTest(unittest.TestCase):
         self.assertNotIn("alembic_version", sa.inspect(self.engine).get_table_names())
         self.assertFalse((self.path.parent / ".backups").exists())
 
+    def test_business_upgrade_preserves_todos_and_retires_only_local_verification(self):
+        self.legacy()
+        upgrade_database(self.engine, "0002_article_identity")
+        with self.engine.begin() as connection:
+            connection.execute(legacy_metadata.tables["todos"].insert(),
+                               legacy_row("todos", id=21, user_id=4, opportunity_id=11, title="保留待办"))
+            connection.execute(legacy_metadata.tables["opportunity_progress_plans"].insert(),
+                               legacy_row("opportunity_progress_plans", id=22, user_id=4, opportunity_id=11))
+            connection.execute(legacy_metadata.tables["opportunity_progress_items"].insert(),
+                               legacy_row("opportunity_progress_items", id=23, plan_id=22, todo_id=21, synced_to_todo=True))
+            connection.exec_driver_sql("UPDATE opportunities SET verification_status='verified', credibility_score=97, "
+                                       "risk_level='low', verification_summary='本地规则核验' WHERE id=11")
+            connection.exec_driver_sql("UPDATE recommendations SET total_score=90 WHERE id=13")
+        upgrade_database(self.engine)
+        with self.engine.begin() as connection:
+            self.assertEqual(connection.exec_driver_sql("SELECT id, title, task_key FROM todos").one(),
+                             (21, "保留待办", "opportunity"))
+            self.assertEqual(connection.exec_driver_sql("SELECT synced_to_todo, todo_id FROM opportunity_progress_items").one(),
+                             (0, None))
+            self.assertEqual(connection.exec_driver_sql("SELECT verification_status, credibility_score, verified_at, evidence_sources FROM opportunities").one(),
+                             ("rule_checked", None, None, "[]"))
+            self.assertEqual(connection.exec_driver_sql("SELECT id, total_score FROM recommendations").one(), (13, 85))
+            columns = [c["name"] for c in sa.inspect(connection).get_columns("todos") if c["name"] not in {"id", "task_key"}]
+            names = ", ".join(columns)
+            connection.exec_driver_sql(f"INSERT INTO todos ({names}, task_key) SELECT {names}, 'plan-item:23' FROM todos WHERE id=21")
+            self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall(), [])
+        with self.assertRaises(sa.exc.IntegrityError):
+            with self.engine.begin() as connection:
+                connection.exec_driver_sql(f"INSERT INTO todos ({names}, task_key) SELECT {names}, 'plan-item:23' FROM todos WHERE id=21")
+
+    def test_business_downgrade_refuses_to_merge_tasks(self):
+        upgrade_database(self.engine)
+        with self.engine.connect() as connection:
+            config = migration_config()
+            config.attributes["connection"] = connection
+            with self.assertRaisesRegex(RuntimeError, "不自动合并待办"):
+                command.downgrade(config, "0002_article_identity")
+        with self.engine.connect() as connection:
+            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0003_business_integrity")
+
     def test_simultaneous_startup_migrations_are_serialized(self):
         self.legacy()
         barrier = threading.Barrier(2, timeout=10)
@@ -174,7 +214,7 @@ class MigrationTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(migrate, range(2)))
         with self.engine.connect() as connection:
-            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0002_article_identity")
+            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0003_business_integrity")
             self.assertEqual(connection.exec_driver_sql("SELECT id FROM articles").fetchall(), [(7,)])
         self.assertEqual(len(list((self.path.parent / ".backups").glob("*.db"))), 1)
 

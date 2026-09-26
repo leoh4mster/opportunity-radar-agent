@@ -88,6 +88,8 @@ def verification_badge(opp: dict) -> str:
     risk = opp.get("risk_level") or ""
     if not status:
         return "未核验"
+    if status == "rule_checked":
+        return "仅本地规则检查 · 未联网核验"
     if status == "verified":
         return f"已核验：风险 {risk}" if risk else "已核验"
     if status == "uncertain":
