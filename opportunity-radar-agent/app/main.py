@@ -11,14 +11,21 @@ from app.api.agent_actions import router as agent_actions_router
 from app.api.growth_memory import router as growth_memory_router
 from app.api.routes import router
 from app.core.config import get_settings
-from app.core.database import init_db
+from app.core.database import init_db, SessionLocal
+from app.services.job_service import JobWorker
 from app.core.observability import configure_logging, request_id_context, runtime_metrics
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    worker = JobWorker(SessionLocal)
+    worker.start()
+    app.state.job_worker = worker
+    try:
+        yield
+    finally:
+        worker.stop()
 
 
 settings = get_settings()

@@ -58,7 +58,7 @@ class OpportunityProgressService:
             raise RuntimeError("AI 推进任务丢失")
         return refreshed
 
-    def start_analysis_task(self, db: Session, user_id: int, opportunity_id: int) -> OpportunityProgressTask:
+    def start_analysis_task(self, db: Session, user_id: int, opportunity_id: int, commit: bool = True) -> OpportunityProgressTask:
         user = db.get(UserProfile, user_id)
         if not user:
             raise ValueError("用户画像不存在")
@@ -85,7 +85,10 @@ class OpportunityProgressService:
             status="analyzing",
         )
         db.add(task)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(task)
         return task
 
@@ -631,7 +634,7 @@ class OpportunityProgressService:
             "confirmed_at": update.confirmed_at,
         }
 
-    def start_web_check_for_task(self, db: Session, task_id: int, request_id: str = "") -> OpportunityProgressWebCheck:
+    def start_web_check_for_task(self, db: Session, task_id: int, request_id: str = "", commit: bool = True) -> OpportunityProgressWebCheck:
         task = db.get(OpportunityProgressTask, task_id)
         if not task:
             raise ValueError("推进任务不存在")
@@ -651,11 +654,14 @@ class OpportunityProgressService:
             request_id=request_id,
         )
         db.add(check)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(check)
         return check
 
-    def start_web_check_for_plan(self, db: Session, plan_id: int, request_id: str = "") -> OpportunityProgressWebCheck:
+    def start_web_check_for_plan(self, db: Session, plan_id: int, request_id: str = "", commit: bool = True) -> OpportunityProgressWebCheck:
         plan = db.get(OpportunityProgressPlan, plan_id)
         if not plan:
             raise ValueError("推进计划不存在")
@@ -675,7 +681,10 @@ class OpportunityProgressService:
             request_id=request_id,
         )
         db.add(check)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(check)
         return check
 

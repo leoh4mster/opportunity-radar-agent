@@ -11,6 +11,18 @@ def delete_related_data(db: Session, *, opportunity_ids=(), user_id=None) -> int
 
     plan_ids = select(models.OpportunityProgressPlan.id).where(scope(models.OpportunityProgressPlan))
     task_ids = select(models.OpportunityProgressTask.id).where(scope(models.OpportunityProgressTask))
+    from app.services.job_service import ACTIVE
+    job_scope = models.DurableJob.user_id == user_id if user_id is not None else or_(
+        models.DurableJob.kind == "recommendation",
+        (models.DurableJob.kind == "analysis") & models.DurableJob.object_id.in_(task_ids),
+        (models.DurableJob.kind == "web_check") & models.DurableJob.object_id.in_(
+            select(models.OpportunityProgressWebCheck.id).where(scope(models.OpportunityProgressWebCheck))))
+    for job in db.query(models.DurableJob).filter(job_scope).all():
+        job.snapshot, job.checkpoints = "{}", "{}"
+        if job.status in ACTIVE:
+            job.status, job.active_key, job.token, job.lease_until = "failed", None, None, None
+            job.error_code, job.error_message = "input_changed", "输入已删除，请重新提交任务"
+    db.flush()
     # Remove referencing rows before plans, tasks and todos. Bulk deletes avoid
     # ORM relationship loading accidentally setting non-null foreign keys to NULL.
     db.execute(delete(models.OpportunityProgressWebCheck).where(or_(

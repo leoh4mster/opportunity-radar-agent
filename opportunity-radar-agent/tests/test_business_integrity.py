@@ -257,9 +257,18 @@ class BusinessIntegrityTest(unittest.TestCase):
             self.assertEqual(upload.status_code, 200, upload.text)
             aid = upload.json()["article_ids"][0]
             processed = self.client.post("/pipeline/process")
-            self.assertEqual(processed.status_code, 200, processed.text)
+            self.assertEqual(processed.status_code, 202, processed.text)
+            from app.services.job_service import JobService
+            queue = JobService(sessionmaker(bind=self.engine))
+            self.db.rollback()
+            while queue.run_once():
+                pass
             ranked = self.client.post(f"/recommendations/generate/{uid}?force=false")
-            self.assertEqual(ranked.status_code, 200, ranked.text)
+            self.assertEqual(ranked.status_code, 202, ranked.text)
+            self.db.rollback()
+            queue.run_once()
+            self.db.expire_all()
+            ranked = self.client.get(f"/recommendations/{uid}")
             rec = next(row for row in ranked.json() if row["opportunity"]["article_id"] == aid)
             oid = rec["opportunity_id"]
             for action in ("todo", "calendar"):

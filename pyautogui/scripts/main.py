@@ -114,7 +114,7 @@ def main() -> int:
                         source="公众号自动采集",
                         metadata=meta,
                     )
-                    print(f"[backend] ingest result: {result}")
+                    print(f"[backend] {result.get('processing_message', '文章已保存')}")
                 except RuntimeError as exc:
                     print(f"[backend] ingest failed: {exc}")
 

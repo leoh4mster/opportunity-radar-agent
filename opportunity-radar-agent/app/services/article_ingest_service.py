@@ -1,8 +1,8 @@
 """Direct clean-article ingestion service.
 
 This service receives cleaned article text from the GUI collector, writes it
-into the existing Article table, and triggers opportunity extraction in the
-same database transaction.
+into the existing Article table, and creates an extraction job in the same
+short transaction. A worker performs model calls after that transaction ends.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from app.models.entities import Article
 from app.schemas.dto import CleanArticleIngestRequest
 from app.services.article_identity import compute_content_hash
 from app.services.article_store import insert_article_once
-from app.services.extraction_service import ExtractionService
+from app.services.job_service import JobService, public_job, lock
+from app.core.observability import current_request_id
 
 
 logger = logging.getLogger(__name__)
@@ -69,32 +70,18 @@ class ArticleIngestService:
             processed=False,
         )
 
+        lock(db)
         article, created = insert_article_once(db, article)
-        if not created:
-            article_id = article.id
-            db.commit()  # Release the duplicate request's transaction/SQLite lock.
-            return {
-                "created": False,
-                "duplicate": True,
-                "article_id": article_id,
-                "content_hash": content_hash,
-                "message": "duplicate",
-            }
-
-        created_opportunities = ExtractionService().process_article(db, article, commit=False)
+        job = None
+        if not article.processed:
+            job = JobService.submit(db, "extraction", article.id, current_request_id())
         db.commit()
         db.refresh(article)
-
-        logger.info(
-            "clean article ingested article_id=%s title=%s created_opportunities=%s",
-            article.id,
-            article.title,
-            created_opportunities,
-        )
         return {
-            "created": True,
-            "duplicate": False,
+            "created": created,
+            "duplicate": not created,
             "article_id": article.id,
             "content_hash": content_hash,
-            "message": "created",
+            "message": "saved_and_queued" if job else "already_processed",
+            "job": public_job(job) if job else None,
         }

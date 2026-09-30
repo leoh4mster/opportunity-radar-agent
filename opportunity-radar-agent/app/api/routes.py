@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import logging
 from pathlib import Path
-import threading
 import time
 
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File
@@ -14,6 +13,7 @@ from app.core.observability import current_request_id, run_with_request_context,
 
 from app.models.entities import (
     Article,
+    DurableJob,
     CalendarEvent,
     EnrichmentResult,
     GrowthMemorySnapshot,
@@ -30,6 +30,9 @@ from app.models.entities import (
     UserProfile,
 )
 from app.schemas.dto import (
+    JobOut,
+    JobSubmissionOut,
+    JobBatchOut,
     ArticleDeleteResult,
     ArticleOut,
     CalendarDashboardOut,
@@ -80,10 +83,10 @@ from app.services.similar_opportunity_search_service import SimilarOpportunitySe
 from app.services.todo_service import TodoService
 from app.services.tool_service import ToolService
 
+from app.services.job_service import JobService, JobFailure, lock, public_job
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
-_recommendation_refresh_locks: set[int] = set()
-_recommendation_refresh_guard = threading.Lock()
 
 
 @router.get("/health")
@@ -262,8 +265,8 @@ def upload_articles(file: UploadFile = File(...), db: Session = Depends(get_db))
         file.file.close()
 
 
-@router.post("/articles/ingest-clean", response_model=CleanArticleIngestResult)
-def ingest_clean_article(payload: CleanArticleIngestRequest, db: Session = Depends(get_db)) -> CleanArticleIngestResult:
+@router.post("/articles/ingest-clean", status_code=202, response_model=CleanArticleIngestResult)
+def ingest_clean_article(payload: CleanArticleIngestRequest, db: Session = Depends(get_db)) -> dict:
     try:
         result = ArticleIngestService().ingest_clean_article(db, payload)
     except ValueError as exc:
@@ -280,7 +283,7 @@ def ingest_clean_article(payload: CleanArticleIngestRequest, db: Session = Depen
         result.get("duplicate"),
         result.get("article_id"),
     )
-    return CleanArticleIngestResult(**result)
+    return result
 
 
 @router.get("/articles", response_model=list[ArticleOut])
@@ -310,15 +313,13 @@ def delete_article(article_id: int, db: Session = Depends(get_db)) -> ArticleDel
     return ArticleDeleteResult(**result)
 
 
-@router.post("/pipeline/process", response_model=ProcessResult)
-def process_pipeline(db: Session = Depends(get_db)) -> ProcessResult:
-    try:
-        processed, created = ExtractionService().process_unprocessed_articles(db)
-    except Exception as exc:
-        logger.exception("pipeline process failed")
-        raise HTTPException(status_code=500, detail="机会抽取处理失败") from exc
-    logger.info("pipeline processed_articles=%s created_opportunities=%s", processed, created)
-    return ProcessResult(processed_articles=processed, created_opportunities=created)
+@router.post("/pipeline/process", status_code=202, response_model=JobBatchOut)
+def process_pipeline(db: Session = Depends(get_db)) -> dict:
+    lock(db)
+    jobs = [JobService.submit(db, "extraction", article.id, current_request_id())
+            for article in db.query(Article).filter(Article.processed.is_(False)).all()]
+    db.commit()
+    return {"jobs": [public_job(job) for job in jobs]}
 
 
 @router.get("/opportunities", response_model=list[OpportunityOut])
@@ -538,72 +539,19 @@ def record_recommendation_feedback(
         raise HTTPException(status_code=500, detail="反馈记录失败") from exc
 
 
-@router.post("/recommendations/generate/{user_id}", response_model=list[RecommendationOut])
-def generate_recommendations(
-    user_id: int,
-    force: bool = True,
-    db: Session = Depends(get_db),
-) -> list[Recommendation]:
-    request_id = current_request_id()
-    started = time.perf_counter()
-    existing = _list_recommendation_rows(db, user_id)
-    if force:
-        with _recommendation_refresh_guard:
-            if user_id in _recommendation_refresh_locks:
-                logger.info("recommendation refresh already running request_id=%s user_id=%s", request_id, user_id)
-                return existing
-            _recommendation_refresh_locks.add(user_id)
-        threading.Thread(
-            target=run_with_request_context,
-            args=(request_id, _refresh_recommendations_background, user_id, force, request_id),
-            daemon=True,
-        ).start()
-        logger.info("recommendation refresh scheduled request_id=%s user_id=%s existing_count=%s elapsed_ms=%s", request_id, user_id, len(existing), int((time.perf_counter() - started) * 1000))
-        return existing
-    try:
-        recommendations = MatchingService().generate_for_user(db, user_id, force=force)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": request_id}) from exc
-    except RuntimeError as exc:
-        logger.exception("generate recommendations unavailable request_id=%s user_id=%s elapsed_ms=%s", request_id, user_id, int((time.perf_counter() - started) * 1000))
-        raise HTTPException(status_code=503, detail={"error_code": "model_unavailable", "message": "AI 服务暂时不可用", "request_id": request_id}) from exc
-    except Exception as exc:
-        error_code = "database_busy" if "database is locked" in str(exc).lower() else "unknown_error"
-        logger.exception("generate recommendations failed request_id=%s user_id=%s elapsed_ms=%s error_type=%s", request_id, user_id, int((time.perf_counter() - started) * 1000), type(exc).__name__)
-        raise HTTPException(status_code=503 if error_code == "database_busy" else 500, detail={"error_code": error_code, "message": "系统正在处理其他任务，请稍后重试" if error_code == "database_busy" else "服务处理失败", "request_id": request_id}) from exc
-    logger.info("recommendations generated request_id=%s user_id=%s count=%s elapsed_ms=%s", request_id, user_id, len(recommendations), int((time.perf_counter() - started) * 1000))
-    return recommendations
+@router.post("/recommendations/generate/{user_id}", status_code=202, response_model=JobSubmissionOut)
+def generate_recommendations(user_id: int, force: bool = True, db: Session = Depends(get_db)) -> dict:
+    lock(db)
+    if not db.get(UserProfile, user_id):
+        raise HTTPException(status_code=404, detail="用户画像不存在")
+    job = JobService.submit(db, "recommendation", user_id, current_request_id())
+    db.commit()
+    return {"job": public_job(job)}
 
 
-@router.post("/recommendations/{user_id}/generate", response_model=list[RecommendationOut])
-def generate_recommendations_alias(user_id: int, force: bool = True, db: Session = Depends(get_db)) -> list[Recommendation]:
+@router.post("/recommendations/{user_id}/generate", status_code=202, response_model=JobSubmissionOut)
+def generate_recommendations_alias(user_id: int, force: bool = True, db: Session = Depends(get_db)) -> dict:
     return generate_recommendations(user_id=user_id, force=force, db=db)
-
-
-def _list_recommendation_rows(db: Session, user_id: int) -> list[Recommendation]:
-    return (
-        db.query(Recommendation)
-        .join(Opportunity, Recommendation.opportunity_id == Opportunity.id)
-        .options(joinedload(Recommendation.opportunity))
-        .filter(Recommendation.user_id == user_id)
-        .order_by(Recommendation.total_score.desc())
-        .all()
-    )
-
-
-def _refresh_recommendations_background(user_id: int, force: bool, request_id: str) -> None:
-    started = time.perf_counter()
-    db = SessionLocal()
-    try:
-        rows = MatchingService().generate_for_user(db, user_id, force=force)
-        logger.info("recommendation refresh background completed request_id=%s user_id=%s count=%s elapsed_ms=%s", request_id, user_id, len(rows), int((time.perf_counter() - started) * 1000))
-    except Exception as exc:
-        db.rollback()
-        logger.exception("recommendation refresh background failed request_id=%s user_id=%s elapsed_ms=%s error_type=%s", request_id, user_id, int((time.perf_counter() - started) * 1000), type(exc).__name__)
-    finally:
-        db.close()
-        with _recommendation_refresh_guard:
-            _recommendation_refresh_locks.discard(user_id)
 
 
 @router.post("/recommendations/regenerate-all")
@@ -726,30 +674,20 @@ def opportunity_assistant_chat(payload: OpportunityAssistantChatRequest, db: Ses
         raise HTTPException(status_code=500, detail="机会助理暂时不可用") from exc
 
 
-@router.post("/tools/opportunity-progress/{user_id}/{opportunity_id}/analyze", response_model=OpportunityProgressAnalyzeResponse)
+@router.post("/tools/opportunity-progress/{user_id}/{opportunity_id}/analyze", status_code=202)
 def analyze_opportunity_progress(user_id: int, opportunity_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = current_request_id()
-    started = time.perf_counter()
+    lock(db)
     service = OpportunityProgressService()
     try:
-        task = service.start_analysis_task(db, user_id, opportunity_id)
-        if task.status == "analyzing":
-            threading.Thread(
-                target=run_with_request_context,
-                args=(request_id, service.execute_analysis_task, task.id),
-                daemon=True,
-            ).start()
-        logger.info("opportunity progress task started request_id=%s user_id=%s opportunity_id=%s task_id=%s status=%s elapsed_ms=%s", request_id, user_id, opportunity_id, task.id, task.status, int((time.perf_counter() - started) * 1000))
-        return {"success": True, "message": "AI 推进分析已开始。", "task": service.serialize_task(task)}
+        task = service.start_analysis_task(db, user_id, opportunity_id, commit=False)
+        job = db.query(DurableJob).filter_by(kind="analysis", object_id=task.id).order_by(DurableJob.id.desc()).first()
+        if job is None:
+            job = JobService.submit(db, "analysis", task.id, current_request_id())
+        db.commit()
+        return {"success": True, "task": service.serialize_task(task), "job": public_job(job)}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": request_id}) from exc
-    except RuntimeError as exc:
-        logger.exception("opportunity progress analysis failed request_id=%s user_id=%s opportunity_id=%s elapsed_ms=%s", request_id, user_id, opportunity_id, int((time.perf_counter() - started) * 1000))
-        raise HTTPException(status_code=502, detail={"error_code": "model_unavailable", "message": "AI 服务暂时不可用", "request_id": request_id}) from exc
-    except Exception as exc:
-        error_code = "database_busy" if "database is locked" in str(exc).lower() else "unknown_error"
-        logger.exception("opportunity progress unexpected failure request_id=%s user_id=%s opportunity_id=%s elapsed_ms=%s error_type=%s", request_id, user_id, opportunity_id, int((time.perf_counter() - started) * 1000), type(exc).__name__)
-        raise HTTPException(status_code=503 if error_code == "database_busy" else 500, detail={"error_code": error_code, "message": "系统正在处理其他任务，请稍后重试" if error_code == "database_busy" else "服务处理失败", "request_id": request_id}) from exc
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/tools/opportunity-progress/tasks/{task_id}", response_model=OpportunityProgressAnalyzeResponse)
@@ -775,46 +713,32 @@ def get_latest_opportunity_progress_task(user_id: int, opportunity_id: int, db: 
     return {"success": True, "message": "ok", "task": service.serialize_task(task)}
 
 
-@router.post("/tools/opportunity-progress/tasks/{task_id}/web-check")
+@router.post("/tools/opportunity-progress/tasks/{task_id}/web-check", status_code=202)
 def start_task_web_check(task_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = current_request_id()
+    lock(db)
     service = OpportunityProgressService()
     try:
-        check = service.start_web_check_for_task(db, task_id, request_id=request_id)
-        if check.status == "searching":
-            threading.Thread(
-                target=run_with_request_context,
-                args=(request_id, service.execute_web_check, check.id),
-                daemon=True,
-            ).start()
-        logger.info("progress web check scheduled request_id=%s check_id=%s task_id=%s", request_id, check.id, task_id)
-        return {"success": True, "message": "联网核实已开始。", "web_check": service.serialize_web_check(check)}
+        check = service.start_web_check_for_task(db, task_id, request_id=current_request_id(), commit=False)
+        job = JobService.submit(db, "web_check", check.id, current_request_id())
+        db.commit()
+        return {"success": True, "web_check": service.serialize_web_check(check), "job": public_job(job)}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": request_id}) from exc
-    except Exception as exc:
-        logger.exception("start task web check failed request_id=%s task_id=%s error_type=%s", request_id, task_id, type(exc).__name__)
-        raise HTTPException(status_code=500, detail={"error_code": "unknown_error", "message": "联网核实启动失败", "request_id": request_id}) from exc
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/tools/opportunity-progress/plans/{plan_id}/web-check")
+@router.post("/tools/opportunity-progress/plans/{plan_id}/web-check", status_code=202)
 def start_plan_web_check(plan_id: int, db: Session = Depends(get_db)) -> dict:
-    request_id = current_request_id()
+    lock(db)
     service = OpportunityProgressService()
     try:
-        check = service.start_web_check_for_plan(db, plan_id, request_id=request_id)
-        if check.status == "searching":
-            threading.Thread(
-                target=run_with_request_context,
-                args=(request_id, service.execute_web_check, check.id),
-                daemon=True,
-            ).start()
-        logger.info("progress web check scheduled request_id=%s check_id=%s plan_id=%s", request_id, check.id, plan_id)
-        return {"success": True, "message": "联网核实已开始。", "web_check": service.serialize_web_check(check)}
+        check = service.start_web_check_for_plan(db, plan_id, request_id=current_request_id(), commit=False)
+        job = JobService.submit(db, "web_check", check.id, current_request_id())
+        db.commit()
+        return {"success": True, "web_check": service.serialize_web_check(check), "job": public_job(job)}
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail={"error_code": "not_found", "message": str(exc), "request_id": request_id}) from exc
-    except Exception as exc:
-        logger.exception("start plan web check failed request_id=%s plan_id=%s error_type=%s", request_id, plan_id, type(exc).__name__)
-        raise HTTPException(status_code=500, detail={"error_code": "unknown_error", "message": "联网核实启动失败", "request_id": request_id}) from exc
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/tools/opportunity-progress/web-checks/{check_id}")
@@ -1089,3 +1013,48 @@ def call_tool(tool_name: str, payload: ToolCallRequest, db: Session = Depends(ge
         return ToolService().call(db, tool_name, payload.user_id, payload.opportunity_id, payload.payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/jobs", response_model=list[JobOut])
+def list_jobs(kind: str | None = None, object_id: int | None = None, user_id: int | None = None,
+              db: Session = Depends(get_db)) -> list[dict]:
+    query = db.query(DurableJob)
+    for key, value in (("kind", kind), ("object_id", object_id), ("user_id", user_id)):
+        if value is not None:
+            query = query.filter(getattr(DurableJob, key) == value)
+    return [public_job(job) for job in query.order_by(DurableJob.id.desc()).limit(500).all()]
+
+
+@router.get("/jobs/{job_id}", response_model=JobOut)
+def get_job(job_id: int, db: Session = Depends(get_db)) -> dict:
+    job = db.get(DurableJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return public_job(job)
+
+
+@router.post("/jobs/{job_id}/retry", status_code=202, response_model=JobSubmissionOut)
+def retry_job(job_id: int, db: Session = Depends(get_db)) -> dict:
+    lock(db)
+    old = db.get(DurableJob, job_id)
+    if not old:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    successor = db.query(DurableJob).filter_by(retry_of=old.id).order_by(DurableJob.id.desc()).first()
+    if successor:
+        return {"job": public_job(successor)}
+    if old.status != "failed":
+        raise HTTPException(status_code=409, detail="只能重试失败任务")
+    try:
+        job = JobService.submit(db, old.kind, old.object_id, current_request_id(), retry_of=old.id)
+        if old.kind == "analysis":
+            task = db.get(OpportunityProgressTask, old.object_id)
+            task.status, task.error_message = "analyzing", ""
+        elif old.kind == "web_check":
+            from app.models.entities import OpportunityProgressWebCheck
+            check = db.get(OpportunityProgressWebCheck, old.object_id)
+            check.status, check.error_message = "searching", ""
+        db.commit()
+        return {"job": public_job(job)}
+    except JobFailure as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="输入已删除，无法重试") from exc

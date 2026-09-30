@@ -48,7 +48,7 @@ class IngestionAPITest(unittest.TestCase):
         duplicate = self.client.post("/articles/ingest-clean", json={
             "content": content, "content_hash": "incorrect-client-hash",
         })
-        self.assertEqual(duplicate.status_code, 200)
+        self.assertEqual(duplicate.status_code, 202)
         self.assertTrue(duplicate.json()["duplicate"])
         self.assertEqual(duplicate.json()["article_id"], first_id)
         self.assertEqual(duplicate.json()["content_hash"], compute_content_hash(content))
@@ -60,6 +60,9 @@ class IngestionAPITest(unittest.TestCase):
         self.assertTrue(response.json()["created"])
         duplicate = self.upload(content.encode(), "article.txt")
         self.assertEqual(duplicate.json()["skipped_duplicates"], 1)
+        from app.services.job_service import JobService
+        self.db.rollback()
+        JobService(sessionmaker(bind=self.engine)).run_once()
         self.assertEqual(self.db.query(Opportunity).count(), 1)
 
     def test_bad_second_row_does_not_leave_pending_first_row(self):
@@ -94,8 +97,11 @@ class IngestionAPITest(unittest.TestCase):
         self.db.commit()
         self.assertEqual(self.db.query(Article).count(), 0)
 
-    def test_extraction_failure_rolls_back_collector_article(self):
-        with patch("app.services.extraction_service.ExtractionService.process_article", side_effect=RuntimeError("failed")):
+    def test_extraction_failure_preserves_collector_article(self):
+        with patch("app.services.llm_service.LLMService.extract_opportunities", side_effect=RuntimeError("failed")):
             response = self.client.post("/articles/ingest-clean", json={"content": "article"})
-        self.assertEqual(response.status_code, 500)
-        self.assertEqual(self.db.query(Article).count(), 0)
+            from app.services.job_service import JobService
+            self.db.rollback()
+            JobService(sessionmaker(bind=self.engine)).run_once()
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(self.db.query(Article).count(), 1)

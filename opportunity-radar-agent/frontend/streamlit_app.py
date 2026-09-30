@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 import streamlit as st
+from job_components import render_jobs
 
 
 API_BASE = os.environ.get("API_BASE", "http://127.0.0.1:8000")
@@ -687,14 +688,13 @@ def render_web_check_result(web_check: dict | None, owner_type: str, owner_id: i
         status = web_check.get("status") or "not_searched"
         st.caption(status_labels.get(status, "未联网"))
         button_label = "重新联网核实" if status in {"completed", "partially_completed", "failed"} else "联网核实最新信息"
-        if status == "searching":
-            try:
-                latest = get_progress_web_check(int(web_check["id"]))
-                st.session_state[state_key] = latest.get("web_check")
-            except APIClientError as exc:
-                st.warning(str(exc))
-            time.sleep(2)
-            st.rerun()
+        def refresh_check():
+            st.session_state[state_key] = get_progress_web_check(int(web_check["id"])).get("web_check")
+        active = render_jobs(api_get, api_post, kind="web_check", object_id=int(web_check["id"]),
+                             key=f"web-jobs-{state_key}", on_refresh=refresh_check)
+        web_check = st.session_state.get(state_key) or web_check
+        status = web_check.get("status")
+        if active:
             return
         if status == "failed":
             st.warning("联网搜索暂时失败，当前仍基于本地信息分析。")
@@ -866,23 +866,22 @@ def render_opportunity_progress_panel(user_id: int, opp_id: int, task_key: str, 
         return
 
     with st.expander("AI 推进当前机会", expanded=True):
-        if task.get("status") == "analyzing":
+        def refresh_task():
+            latest = get_opportunity_progress_task(int(task["id"]))
+            st.session_state[task_key] = latest.get("task") or task
+        active = render_jobs(api_get, api_post, kind="analysis", object_id=int(task["id"]),
+                             key=f"analysis-jobs-{task_key}", on_refresh=refresh_task)
+        task = st.session_state.get(task_key) or task
+        if active:
             st.info("正在分析当前机会并规划下一步……")
-            try:
-                latest = get_opportunity_progress_task(int(task["id"]))
-                st.session_state[task_key] = latest.get("task") or task
-            except APIClientError as exc:
-                st.warning(str(exc))
-            time.sleep(2)
-            st.rerun()
             return
         if task.get("status") == "failed":
-            st.error(task.get("error_message") or "AI 推进分析失败，请稍后重试。")
-            if st.button("重新分析", key=f"progress-retry-{task.get('id')}-{opp_id}"):
+            st.error(task.get("error_message") or "推进分析失败")
+            # Old interrupted tasks have no job row; starting analysis creates a new task.
+            if st.button("重新分析", key=f"progress-retry-{task['id']}-{opp_id}"):
                 try:
                     result = analyze_opportunity_progress(user_id, opp_id)
                     st.session_state[task_key] = result.get("task") or {}
-                    st.success("AI 推进分析已重新开始")
                     st.rerun()
                 except APIClientError as exc:
                     st.error(str(exc))
@@ -979,6 +978,7 @@ def render_opportunity_actions(
     context: str = "source_article_detail",
     article_context: dict | None = None,
 ) -> None:
+    context = f"{context}-{user_id}"
     rec = recommendation or {}
     rec_id = rec.get("id") or f"opp-{opportunity['id']}"
     opp_id = opportunity["id"]
@@ -993,7 +993,8 @@ def render_opportunity_actions(
         current_plan = get_current_progress_plan(user_id, opp_id).get("plan")
         if current_plan:
             st.session_state[plan_key] = current_plan
-        elif not st.session_state.get(progress_key):
+        else:
+            st.session_state.pop(plan_key, None)
             latest_task = get_latest_opportunity_progress_task(user_id, opp_id).get("task")
             if latest_task and latest_task.get("status") in {"analyzing", "waiting_confirmation", "stopped", "failed"}:
                 st.session_state[progress_key] = latest_task
@@ -1005,7 +1006,7 @@ def render_opportunity_actions(
         st.session_state[f"assistant-open-{rec_id}-{opp_id}"] = True
     progress_button_label = "查看推进计划" if current_plan or st.session_state.get(plan_key) else "让 AI 帮我推进"
     progress_busy_key = f"{context}-progress-busy-{rec_id}-{opp_id}"
-    if action_cols[1].button(progress_button_label, key=f"{context}-progress-open-btn-{rec_id}-{opp_id}", disabled=st.session_state.get(progress_busy_key, False)):
+    if action_cols[1].button(progress_button_label, key=f"{context}-progress-open-btn-{rec_id}-{opp_id}", disabled=st.session_state.get(progress_busy_key, False) or (not current_plan and (st.session_state.get(progress_key) or {}).get("status") == "analyzing")):
         if current_plan or st.session_state.get(plan_key):
             st.session_state[f"progress-open-{rec_id}-{opp_id}"] = True
         else:
@@ -1014,7 +1015,7 @@ def render_opportunity_actions(
                 with st.spinner("正在创建分析任务……"):
                     result = analyze_opportunity_progress(user_id, opp_id)
                 st.session_state[progress_key] = result.get("task") or {}
-                st.success("AI 推进分析已开始")
+                st.rerun()
             except APIClientError as exc:
                 st.error(str(exc))
             finally:
@@ -1108,16 +1109,16 @@ def render_recommendations_page() -> None:
         user_id = int(selected_rec_profile["id"])
     else:
         user_id = st.number_input("用户 ID", min_value=1, value=1, step=1)
-    refresh_key = f"recommend_refreshing_{user_id}"
-    if st.button("生成/刷新推荐", disabled=st.session_state.get(refresh_key, False)):
+    refreshing = render_jobs(api_get, api_post, kind="recommendation", object_id=user_id,
+                             key=f"recommend-jobs-{user_id}")
+    if refreshing:
+        st.info("推荐正在刷新，下方暂时保留上次结果。")
+    if st.button("生成/刷新推荐", disabled=refreshing):
         try:
-            st.session_state[refresh_key] = True
-            api_post(f"/recommendations/generate/{user_id}?force=true", timeout=120)
-            st.success("推荐刷新已开始，稍后会自动保留/更新列表")
+            api_post(f"/recommendations/generate/{user_id}?force=true", timeout=15)
+            st.rerun()
         except APIClientError as exc:
             st.error(str(exc))
-        finally:
-            st.session_state[refresh_key] = False
     try:
         recommendations = api_get(f"/recommendations/{user_id}")
         for rec in recommendations:
@@ -1408,10 +1409,14 @@ with st.sidebar:
             st.success(f"新增 {result['imported']} 篇，跳过重复 {result['skipped_duplicates']} 篇。")
         except APIClientError as exc:
             st.error(str(exc))
-    if st.button("处理未抽取文章", use_container_width=True):
+    processing = render_jobs(api_get, api_post, kind="extraction", key="article-jobs")
+    if st.button("处理未抽取文章", use_container_width=True, disabled=processing):
         try:
-            result = api_post("/pipeline/process")
-            st.success(f"处理 {result['processed_articles']} 篇文章，新增 {result['created_opportunities']} 个机会")
+            result = api_post("/pipeline/process", timeout=15)
+            if result.get("jobs"):
+                st.rerun()
+            else:
+                st.info("没有待处理文章。")
         except APIClientError as exc:
             st.error(str(exc))
 

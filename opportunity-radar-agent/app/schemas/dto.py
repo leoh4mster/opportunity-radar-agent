@@ -99,7 +99,37 @@ class CleanArticleIngestRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class JobOut(BaseModel):
+    id: int
+    kind: str
+    object_id: int
+    user_id: int | None = None
+    status: str
+    attempts: int
+    retry_of: int | None = None
+    request_id: str
+    stage: str
+    completed: int
+    total: int
+    mode: str
+    error_code: str
+    error_message: str
+    created_at: datetime
+    updated_at: datetime
+    result: dict[str, Any]
+    status_url: str
+
+
+class JobSubmissionOut(BaseModel):
+    job: JobOut
+
+
+class JobBatchOut(BaseModel):
+    jobs: list[JobOut]
+
+
 class CleanArticleIngestResult(BaseModel):
+    job: JobOut | None = None
     created: bool
     duplicate: bool
     article_id: int | None = None

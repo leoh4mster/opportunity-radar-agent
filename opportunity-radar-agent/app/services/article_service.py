@@ -11,7 +11,7 @@ import logging
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.models.entities import Article, Opportunity
+from app.models.entities import Article, Opportunity, DurableJob
 from app.services.deletion_service import delete_related_data
 
 
@@ -36,6 +36,12 @@ class ArticleService:
                 item[0] for item in db.query(Opportunity.id).filter(Opportunity.article_id == article_id).all()
             ]
 
+            for job in db.query(DurableJob).filter_by(kind="extraction", object_id=article_id).all():
+                job.snapshot, job.checkpoints = "{}", "{}"
+                if job.status in {"queued", "running"}:
+                    job.status, job.active_key, job.token, job.lease_until = "failed", None, None, None
+                    job.error_code, job.error_message = "input_changed", "文章已删除"
+            db.flush()
             deleted_recommendations = delete_related_data(db, opportunity_ids=opportunity_ids)
             deleted_opportunities = db.query(Opportunity).filter(
                 Opportunity.article_id == article_id).delete(synchronize_session=False)

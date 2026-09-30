@@ -50,7 +50,12 @@ def post_clean_article(
 
     try:
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            result = json.loads(response.read().decode("utf-8"))
+            job = result.get("job")
+            result["processing_message"] = (
+                f"文章已保存，抽取已排队，任务 #{job['id']}；尚未完成抽取"
+                if job else "文章已存在且已处理")
+            return result
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Backend HTTP {exc.code}: {detail}") from exc
@@ -83,3 +88,9 @@ def post_clean_article_file(
         },
         backend_url=backend_url,
     )
+
+
+def get_job_status(job_id: int, backend_url: str = DEFAULT_BACKEND_URL) -> dict:
+    """Explicit status lookup; ingestion success alone does not mean extraction success."""
+    with urlopen(backend_url.rstrip("/") + f"/jobs/{job_id}", timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))

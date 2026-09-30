@@ -66,7 +66,7 @@ class ConcurrentIngestionTest(unittest.TestCase):
                     })
                 else:
                     response = client.post("/articles/upload", files={"file": ("article.txt", content.encode())})
-                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.status_code, 202 if collectors_only or index % 2 else 200, response.text)
                 return response.json()
             finally:
                 client.close()
@@ -91,6 +91,8 @@ class ConcurrentIngestionTest(unittest.TestCase):
 
     def test_eight_collectors_extract_only_once(self):
         self.parallel_requests(collectors_only=True)
+        from app.services.job_service import JobService
+        JobService(self.sessions).run_once()
         with self.sessions() as db:
             self.assertEqual(db.query(Opportunity).count(), 1)
 
