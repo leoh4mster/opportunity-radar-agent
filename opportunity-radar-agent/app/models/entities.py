@@ -383,3 +383,32 @@ class OpportunityProgressWebCheck(Base):
     request_id: Mapped[str] = mapped_column(String(80), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DurableJob(Base):
+    """Execution state is independent of business confirmation state."""
+    __tablename__ = "durable_jobs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40), index=True)
+    object_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    active_key: Mapped[Optional[str]] = mapped_column(String(160), nullable=True, unique=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    retry_of: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[str] = mapped_column(String(80), default="")
+    token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    lease_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    input_version: Mapped[str] = mapped_column(String(64), default="")
+    snapshot: Mapped[str] = mapped_column(Text, default="{}")
+    checkpoints: Mapped[str] = mapped_column(Text, default="{}")
+    result: Mapped[str] = mapped_column(Text, default="{}")
+    stage: Mapped[str] = mapped_column(String(80), default="queued")
+    completed: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    mode: Mapped[str] = mapped_column(String(20), default="")
+    error_code: Mapped[str] = mapped_column(String(80), default="")
+    error_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

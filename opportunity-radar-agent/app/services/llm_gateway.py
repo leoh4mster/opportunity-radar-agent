@@ -8,6 +8,8 @@ Supported providers:
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 import logging
 import time
 from typing import Any
@@ -24,6 +26,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODELS = {
     "deepseek": "deepseek-flash",
 }
+
+
+_job_execution = ContextVar("job_execution", default=False)
+
+@contextmanager
+def job_execution():
+    token = _job_execution.set(True)
+    try:
+        yield
+    finally:
+        _job_execution.reset(token)
 
 
 class LLMGatewayError(RuntimeError):
@@ -67,6 +80,8 @@ class LLMGateway:
         max_retries: int = 2,
         response_format: dict[str, Any] | None = None,
     ) -> str:
+        if _job_execution.get():
+            max_retries = 0
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         provider = (self.settings.llm_provider or "").lower().strip()

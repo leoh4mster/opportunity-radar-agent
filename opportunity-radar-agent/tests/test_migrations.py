@@ -74,7 +74,7 @@ class MigrationTest(unittest.TestCase):
         upgrade_database(self.engine)
         with self.engine.connect() as connection:
             context = MigrationContext.configure(connection)
-            self.assertEqual(context.get_current_revision(), "0003_business_integrity")
+            self.assertEqual(context.get_current_revision(), "0004_durable_jobs")
             self.assertEqual(compare_metadata(context, Base.metadata), [])
             self.assertEqual(connection.exec_driver_sql("PRAGMA foreign_keys").scalar(), 1)
         self.assertFalse((self.path.parent / ".backups").exists())
@@ -201,7 +201,7 @@ class MigrationTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "不自动合并待办"):
                 command.downgrade(config, "0002_article_identity")
         with self.engine.connect() as connection:
-            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0003_business_integrity")
+            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0004_durable_jobs")
 
     def test_simultaneous_startup_migrations_are_serialized(self):
         self.legacy()
@@ -214,7 +214,7 @@ class MigrationTest(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(migrate, range(2)))
         with self.engine.connect() as connection:
-            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0003_business_integrity")
+            self.assertEqual(MigrationContext.configure(connection).get_current_revision(), "0004_durable_jobs")
             self.assertEqual(connection.exec_driver_sql("SELECT id FROM articles").fetchall(), [(7,)])
         self.assertEqual(len(list((self.path.parent / ".backups").glob("*.db"))), 1)
 

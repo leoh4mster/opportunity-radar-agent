@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.schemas.llm_outputs import ExtractedOpportunity, RecommendationAnalysis
-from app.services.llm_gateway import LLMGateway, LLMAuthError
+from app.services.llm_gateway import LLMGateway, LLMAuthError, LLMGatewayError, LLMResponseFormatError, _job_execution
 from app.core.observability import runtime_metrics
 from app.services import opportunity_rules
 
@@ -143,6 +143,10 @@ content_overview 请用 150 到 500 个中文字符，基于 article_content_exc
                 self._validate_content_overview(content_overview, source_summary, title)
                 return parsed.model_dump()
             except (RuntimeError, ValidationError) as exc:
+                if _job_execution.get():
+                    if isinstance(exc, LLMGatewayError):
+                        raise
+                    raise LLMResponseFormatError("Invalid recommendation response") from exc
                 last_error = exc
         raise RuntimeError("LLM recommendation validation failed") from last_error
 
@@ -193,6 +197,8 @@ content_overview 请用 150 到 500 个中文字符，基于 article_content_exc
         return parsed
 
     def _repair_json(self, text: str, expected: str) -> str:
+        if _job_execution.get():
+            raise LLMResponseFormatError("Invalid JSON response")
         system = "你是 JSON 格式修复器。只输出修复后的 JSON，不要 Markdown，不要解释。"
         user = f"请把下面内容修复为合法 JSON {expected}。不要改变字段含义：\n{text[:4000]}"
         return self.gateway.chat(
