@@ -983,6 +983,10 @@ def render_opportunity_actions(
     rec_id = rec.get("id") or f"opp-{opportunity['id']}"
     opp_id = opportunity["id"]
     state = rec.get("opportunity_state") or opportunity.get("opportunity_state") or ""
+    try:
+        state = api_get(f"/opportunities/{opp_id}/state?user_id={user_id}")["state"]
+    except APIClientError:
+        st.warning("机会状态暂时不可用，请稍后刷新页面。")
     calendar_created = state == "calendar_created"
     todo_only_created = state == "todo_created"
     todo_calendar_done = calendar_created or todo_only_created
@@ -1100,6 +1104,13 @@ def render_recommendations_page() -> None:
     except Exception:
         profile_options = []
     if profile_options:
+        # Streamlit removes widget state while the detail page hides this selector.
+        # Keep the chosen ID separately so returning does not switch the user.
+        if "recommend_profile_select" not in st.session_state:
+            saved_id = st.session_state.get("recommend_profile_id")
+            saved_profile = next((item for item in profile_options if item["id"] == saved_id), None)
+            if saved_profile is not None:
+                st.session_state["recommend_profile_select"] = saved_profile
         selected_rec_profile = st.selectbox(
             "选择用户画像",
             profile_options,
@@ -1107,6 +1118,7 @@ def render_recommendations_page() -> None:
             key="recommend_profile_select",
         )
         user_id = int(selected_rec_profile["id"])
+        st.session_state["recommend_profile_id"] = user_id
     else:
         user_id = st.number_input("用户 ID", min_value=1, value=1, step=1)
     refreshing = render_jobs(api_get, api_post, kind="recommendation", object_id=user_id,
