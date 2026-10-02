@@ -1,6 +1,6 @@
 # Opportunity Radar Agent 交接记录
 
-最后更新：2026-09-30（Asia/Shanghai）
+最后更新：2026-10-02（Asia/Shanghai）
 
 本文是当前状态与后续执行依据，已替换 2026-09-16 的旧交接状态。除特别说明，应用文件路径均相对于 `opportunity-radar-agent/`。
 
@@ -81,6 +81,7 @@
 - 已对个人库临时副本升级至 `0004`，旧表记录数量不变、外键正常；个人原库未由测试升级。历史分析/核验遗留运行状态标为中断失败，不自动重放私人数据。
 - 2026-09-27 真实 HTTP + 生命周期 worker 的四条任务链通过：6 次 DeepSeek 请求、9,038 tokens、26.152 秒；虚构数据，搜索使用测试替身。报告在 `evaluation/private/jobs-live/20260927T052125142615Z.json`，含代码指纹；后续页面与接口类型修正有离线回归，未重复付费测试。
 - 原生浏览器已验证导入、抽取排队到完成、按钮禁用恢复、画像创建、推荐自动更新、推进任务排队。09-30 恢复时浏览器工具报 `Sky Computer Use native pipe startup failed`；失败/重试与计划确认的剩余浏览器步骤尚未补齐，对应后端及组件有自动化覆盖。
+- 10-02 排查确认：`cua.getState()`、直接选择 Chrome 均在原生连接层失败；重置 JS 会话无效，内置浏览器亦不可用。ChatGPT 日志记录 `failed to read peer code signing identity`，同一轮调用的 Sky 系统日志记录 `Sender process is not authenticated`。沙箱外只读校验表明磁盘上的 `node`、`node_repl` 和电脑控制服务签名均有效，不能判定安装损坏。当前 CUA 桥接进程从 09-26 持续运行，父进程属于 VS Code 的 Codex 扩展；旧进程身份失效是待验证推断。下一恢复步骤是保存工作后重载 VS Code 窗口，重新建立 MCP 进程，再运行 `cua.getState()`；必要时完整退出并重开 VS Code 和 ChatGPT。不要关闭签名认证、修改辅助功能授权或盲目重装来绕过故障。此次未修改应用代码、个人库或调用模型；浏览器剩余验收仍未完成。
 
 ## 4. 人工标注与真实数据评测
 
